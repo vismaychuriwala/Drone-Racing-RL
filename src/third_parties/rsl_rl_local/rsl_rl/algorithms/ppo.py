@@ -24,9 +24,9 @@ class PPO:
         actor_critic,
         num_learning_epochs=1,
         num_mini_batches=1,
-        clip_param=0.2,
-        gamma=0.998,
-        lam=0.95,
+        clip_param=0.2, #PPO param - don't change the policy too aggressively
+        gamma=0.998, #Discount Factor
+        lam=0.95, #Generalized Advantage Estimation - bias vs variance of advantage
         value_loss_coef=1.0,
         entropy_coef=0.0,
         learning_rate=1e-3,
@@ -86,8 +86,11 @@ class PPO:
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
         # Compute the actions and values
+        #Get the action - the policy outputs an action
         self.transition.actions = self.actor_critic.act(obs).detach()
+        #Get the Value function from Actor Critic
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
+        #Get pi_new / pi_old which is required in PPO
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
         self.transition.action_sigma = self.actor_critic.action_std.detach()
@@ -107,8 +110,11 @@ class PPO:
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
             )
+        #if episode ended due to timeout, not failure:
+            #add bootstrap value
 
         # Record the transition
+        # The trajectory builds up here
         self.storage.add_transitions(self.transition)
         self.transition.clear()
         self.actor_critic.reset(dones)
@@ -148,6 +154,77 @@ class PPO:
         ) in generator:
             # TODO ----- START -----
             # Implement the PPO update step
+            # Recompute current policy outputs
+            if self.actor_critic.is_recurrent:
+                self.actor_critic.act(observations, masks=episode_masks, hidden_states=hidden_states[0])
+                actions_log_prob = self.actor_critic.get_actions_log_prob(sampled_actions)
+                values = self.actor_critic.evaluate(
+                    critic_observations, masks=episode_masks, hidden_states=hidden_states[1]
+                )
+            else:
+                self.actor_critic.act(observations)
+                actions_log_prob = self.actor_critic.get_actions_log_prob(sampled_actions)
+                values = self.actor_critic.evaluate(critic_observations)
+
+            entropy = self.actor_critic.entropy
+
+            # Normalize advantages if requested
+            if self.normalize_advantage_per_mini_batch:
+                advantage_estimates = (advantage_estimates - advantage_estimates.mean()) / (
+                    advantage_estimates.std() + 1e-8
+                )
+
+            # Adaptive KL schedule
+            if self.desired_kl is not None and self.schedule == "adaptive":
+                with torch.no_grad():
+                    kl = torch.sum(
+                        torch.log((self.actor_critic.action_std + 1e-8) / (prev_action_stds + 1e-8))
+                        + (
+                            prev_action_stds.pow(2)
+                            + (prev_mean_actions - self.actor_critic.action_mean).pow(2)
+                        )
+                        / (2.0 * self.actor_critic.action_std.pow(2) + 1e-8)
+                        - 0.5,
+                        dim=-1,
+                    )
+                    kl_mean = kl.mean()
+
+                    if kl_mean > self.desired_kl * 2.0:
+                        self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                    elif 0.0 < kl_mean < self.desired_kl / 2.0:
+                        self.learning_rate = min(1e-2, self.learning_rate * 1.5)
+
+                    for param_group in self.optimizer.param_groups:
+                        param_group["lr"] = self.learning_rate
+
+            # PPO surrogate loss
+            ratio = torch.exp(actions_log_prob - prev_log_probs)
+            surrogate = ratio * advantage_estimates
+            surrogate_clipped = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * advantage_estimates
+            surrogate_loss = -torch.min(surrogate, surrogate_clipped).mean()
+
+            # Value loss
+            if self.use_clipped_value_loss:
+                value_clipped = value_targets + (values - value_targets).clamp(-self.clip_param, self.clip_param)
+                value_losses = (values - discounted_returns).pow(2)
+                value_losses_clipped = (value_clipped - discounted_returns).pow(2)
+                value_loss = torch.max(value_losses, value_losses_clipped).mean()
+            else:
+                value_loss = (discounted_returns - values).pow(2).mean()
+
+            # Total loss
+            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
+
+            # Gradient step
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            self.optimizer.step()
+
+            # Logging
+            mean_value_loss += value_loss.item()
+            mean_surrogate_loss += surrogate_loss.item()
+            mean_entropy += entropy.mean().item()
             # TODO ----- END -----
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
