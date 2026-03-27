@@ -154,27 +154,34 @@ class PPO:
         ) in generator:
             # TODO ----- START -----
             # Implement the PPO update step
-            # Recompute current policy outputs
+            # Recompute current policy outputs for the sampled observations.
+            # For recurrent policies pass masks and hidden states to preserve recurrence.
             if self.actor_critic.is_recurrent:
+                # forward pass for actor (produces action_mean/action_std internally)
                 self.actor_critic.act(observations, masks=episode_masks, hidden_states=hidden_states[0])
+                # log-probabilities of the sampled actions under the current policy
                 actions_log_prob = self.actor_critic.get_actions_log_prob(sampled_actions)
+                # value estimates from the critic for the same samples
                 values = self.actor_critic.evaluate(
                     critic_observations, masks=episode_masks, hidden_states=hidden_states[1]
                 )
             else:
+                # non-recurrent forward pass
                 self.actor_critic.act(observations)
                 actions_log_prob = self.actor_critic.get_actions_log_prob(sampled_actions)
                 values = self.actor_critic.evaluate(critic_observations)
 
+            # Entropy of the policy (used as an exploration bonus)
             entropy = self.actor_critic.entropy
 
-            # Normalize advantages if requested
+            # Optionally normalize advantages per mini-batch (stabilizes updates)
             if self.normalize_advantage_per_mini_batch:
                 advantage_estimates = (advantage_estimates - advantage_estimates.mean()) / (
                     advantage_estimates.std() + 1e-8
                 )
 
-            # Adaptive KL schedule
+            # Adaptive KL learning-rate schedule:
+            # Estimate KL between previous and current Gaussian policies and adjust lr.
             if self.desired_kl is not None and self.schedule == "adaptive":
                 with torch.no_grad():
                     kl = torch.sum(
@@ -189,6 +196,7 @@ class PPO:
                     )
                     kl_mean = kl.mean()
 
+                    # If KL is too large, reduce lr; if too small, increase lr.
                     if kl_mean > self.desired_kl * 2.0:
                         self.learning_rate = max(1e-5, self.learning_rate / 1.5)
                     elif 0.0 < kl_mean < self.desired_kl / 2.0:
@@ -197,31 +205,43 @@ class PPO:
                     for param_group in self.optimizer.param_groups:
                         param_group["lr"] = self.learning_rate
 
-            # PPO surrogate loss
+            # PPO surrogate loss:
+            # ratio = pi_theta(a|s) / pi_old(a|s), use clipped objective to limit policy change.
+            actions_log_prob = actions_log_prob.squeeze(-1)
+            prev_log_probs = prev_log_probs.squeeze(-1)
+            advantage_estimates = advantage_estimates.squeeze(-1)
+
             ratio = torch.exp(actions_log_prob - prev_log_probs)
             surrogate = ratio * advantage_estimates
             surrogate_clipped = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * advantage_estimates
+
+            
+            #ratio = torch.exp(actions_log_prob - prev_log_probs)
+            #surrogate = ratio * advantage_estimates
+            #surrogate_clipped = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * advantage_estimates
+            # minimize negative of the clipped/uncapped surrogate (i.e., maximize lower bound)
             surrogate_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
-            # Value loss
+            # Value loss: optionally use clipped value loss similar to policy clipping.
             if self.use_clipped_value_loss:
                 value_clipped = value_targets + (values - value_targets).clamp(-self.clip_param, self.clip_param)
                 value_losses = (values - discounted_returns).pow(2)
                 value_losses_clipped = (value_clipped - discounted_returns).pow(2)
+                # take the max to be conservative (avoid large value changes)
                 value_loss = torch.max(value_losses, value_losses_clipped).mean()
             else:
                 value_loss = (discounted_returns - values).pow(2).mean()
 
-            # Total loss
+            # Total loss: policy surrogate + value loss (weighted) - entropy bonus (weighted)
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy.mean()
 
-            # Gradient step
+            # Backpropagation and optimizer step with gradient clipping for stability.
             self.optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
 
-            # Logging
+            # Accumulate statistics for logging/monitoring
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy += entropy.mean().item()

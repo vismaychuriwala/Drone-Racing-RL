@@ -16,7 +16,7 @@ algorithm:
   # -- training
   learning_rate: 0.001
   num_learning_epochs: 5
-  num_mini_batches: 16  # mini batch size = num_envs * num_steps / num_mini_batches
+  num_mini_batches: 4  # mini batch size = num_envs * num_steps / num_mini_batches
   schedule: adaptive  # adaptive, fixed
 
   # -- Random Network Distillation
@@ -78,7 +78,7 @@ policy:
   # rnn_num_layers: 1
 
 runner:
-    num_steps_per_env: 16  # number of steps per environment per iteration
+    num_steps_per_env: 24  # number of steps per environment per iteration
     max_iterations: 1500  # number of policy updates
     empirical_normalization: false
     # -- logging parameters
