@@ -351,9 +351,6 @@ class DefaultQuadcopterStrategy:
         self.env._desired_pos_w[env_ids, :2] = self.env._waypoints[waypoint_indices, :2].clone()
         self.env._desired_pos_w[env_ids, 2] = self.env._waypoints[waypoint_indices, 2].clone()
 
-        self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
-            self.env._desired_pos_w[env_ids, :2] - self.env._robot.data.root_link_pos_w[env_ids, :2], dim=1
-        )
         # _n_gates_passed set to spawn gate index → sin/cos lap progress obs correct at spawn.
         # _gates_since_spawn always starts at 0 → used for lap completion detection.
         self.env._n_gates_passed[env_ids] = waypoint_indices
@@ -371,6 +368,12 @@ class DefaultQuadcopterStrategy:
             self.env._waypoints[self.env._idx_wp[env_ids], :3],
             self.env._waypoints_quat[self.env._idx_wp[env_ids], :],
             self.env._robot.data.root_link_state_w[env_ids, :3]
+        )
+
+        # Init _last_distance_to_goal from 3D gate-frame distance (consistent
+        # with how progress reward computes dist_now in get_rewards).
+        self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
+            self.env._pose_drone_wrt_gate[env_ids], dim=1
         )
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0

@@ -777,6 +777,15 @@ class QuadcopterEnv(DirectRLEnv):
                                                                  self._waypoints_quat[self._idx_wp, :],
                                                                  drone_pose)
 
+        # After gate crossing, _pose_drone_wrt_gate refers to the new gate.
+        # Sync _last_distance_to_goal so the progress reward doesn't see a
+        # stale distance from the old gate.
+        ids_crossed = torch.where(self._gate_crossed_this_step)[0]
+        if ids_crossed.numel() > 0:
+            self._last_distance_to_goal[ids_crossed] = torch.linalg.norm(
+                self._pose_drone_wrt_gate[ids_crossed], dim=1
+            )
+
         episode_time = self.episode_length_buf * self.cfg.sim.dt * self.cfg.decimation
         cond_h_min_time = torch.logical_and(
             self._robot.data.root_link_pos_w[:, 2] < self.cfg.min_altitude,
