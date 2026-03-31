@@ -149,7 +149,8 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     spawn_vel_max:     float = 0.0    # max initial forward velocity toward gate (m/s); 0 = disabled
 
     # Domain randomization: sample dynamics per episode from eval ranges
-    domain_randomization: bool = False
+    # Must be explicitly set in train/play scripts
+    domain_randomization: bool = None
 
     debug_vis = True
 
@@ -233,7 +234,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     body_rate_scale_xy = 100.0 * D2R
     body_rate_scale_z = 200.0 * D2R
 
-    # Parameters from train.py or play.py
+    # Must be explicitly set in train/play scripts
     is_train = None
 
     k_aero_xy = 9.1785e-7
@@ -243,7 +244,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
 
     max_n_laps = 3
 
-    rewards = {}
+    rewards = None
 
     # Strategy class for custom rewards, observations, and resets
     strategy_class: type[DefaultQuadcopterStrategy] = DefaultQuadcopterStrategy
@@ -260,10 +261,15 @@ class QuadcopterEnv(DirectRLEnv):
 
         self.iteration = 0
 
-        if len(cfg.rewards) > 0:
+        if cfg.is_train is None:
+            raise ValueError("is_train must be explicitly set in train/play script")
+        if cfg.domain_randomization is None:
+            raise ValueError("domain_randomization must be explicitly set in train/play script")
+        if cfg.rewards is None:
+            if cfg.is_train:
+                raise ValueError("rewards must be explicitly set in train script")
+        else:
             self.rew = cfg.rewards
-        elif self.cfg.is_train:
-            raise ValueError("rewards not provided")
 
         # Initialize tensors
         self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
@@ -731,7 +737,7 @@ class QuadcopterEnv(DirectRLEnv):
         wrong_cross = (
             (fwd_cross & ~target_mask)   # correct dir but wrong gate
             | bwd_cross                  # any gate, wrong dir
-        ).any(dim=1)                                           # [N]
+        ).any(dim=1) & ~good_cross       # suppress if correct gate was also crossed
 
         self._prev_x_all_gates = x_all.clone()
 

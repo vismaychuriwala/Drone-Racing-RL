@@ -92,16 +92,21 @@ before rewards and obs. No 1-step lag.
 ## Gate Crossing Detection
 
 Direction-enforced. x-axis of gate local frame = approach direction (gate normal).
+All 7 gates checked in one batched call per step. Classifies as good (correct gate + direction)
+or wrong (wrong gate or wrong direction).
 
 ```python
-x_now    = _pose_drone_wrt_gate[:, 0]     # +ve = approach side, -ve = past
-within_y = |y| < gate_side/2
-within_z = |z| < gate_side/2
-crossed  = (_prev_x > 0) & (x_now <= 0) & within_y & within_z
+# Drone position relative to ALL gates computed each step
+fwd_cross = (prev_x > 0) & (x_now <= 0) & within_bounds   # per gate
+bwd_cross = (prev_x <= 0) & (x_now > 0) & within_bounds   # per gate
+good_cross  = (fwd_cross & target_mask).any(dim=1)
+wrong_cross = ((fwd_cross & ~target_mask) | bwd_cross).any(dim=1) & ~good_cross
 ```
 
-`_prev_x_drone_wrt_gate` init to 1.0 on reset. Updated to `x_now` each step.
-Fly-arounds (crossing plane outside gate bounds) do NOT count.
+`_prev_x_all_gates` initialized to actual x-positions on reset (not blanket 1.0) to avoid
+false crossings on step 1. `good_cross` suppresses `wrong_cross` on the same step — needed
+because co-located opposite-direction gates (e.g. powerloop gates 3 and 6) would otherwise
+fire a spurious backward crossing whenever the correct gate is traversed.
 
 ---
 
@@ -149,9 +154,9 @@ and equivalent to progress when fixed to use drone-to-gate direction).
 - Uses per-lap elapsed time (not episode time) — 2nd/3rd laps get fair timing.
 - 30s episode fits ~3 laps at target pace. Constant=3s gives moderate decay.
 
-**Wrong crossing penalty (-1.0):** all 7 gates checked in one batched call per step. A crossing
-through the wrong gate (correct direction) or any gate in the wrong direction (x: -ve → +ve)
-is penalized. Only correct gate + correct direction advances `_idx_wp`.
+**Wrong crossing penalty (-1.0):** only fires when no correct crossing happened on the same step.
+This prevents spurious penalties on co-located opposite-direction gates (powerloop gates 3/6).
+Only correct gate + correct direction advances `_idx_wp`.
 
 ---
 
@@ -216,8 +221,8 @@ Enable phase 2. Simulates carry-over speed from previous gate exit.
 
 ## Domain Randomization
 
-**Active** (`env_cfg.domain_randomization = True` in `train_race.py`). Per-episode sampling in
-`reset_idx` from the eval ranges specified in the project handout:
+**Currently disabled** (`env_cfg.domain_randomization = False` in `train_race.py`). Per-episode
+sampling in `reset_idx` from the eval ranges specified in the project handout:
 
 ```
 Aerodynamics:  k_aero_xy × [0.5, 2.0],  k_aero_z × [0.5, 2.0]
@@ -226,9 +231,11 @@ PID roll/pitch: kp × [0.85, 1.15],  ki × [0.85, 1.15],  kd × [0.70, 1.30]
 PID yaw:        kp × [0.85, 1.15],  ki × [0.85, 1.15],  kd × [0.70, 1.30]
 ```
 
-Each reset env gets independently sampled dynamics. When `domain_randomization=False` (default
-in cfg), dynamics are fixed at nominal values set in `__init__`. The eval environment samples
-from these exact ranges — training with them forces the policy to be robust to dynamics mismatch.
+Each reset env gets independently sampled dynamics. `is_train`, `domain_randomization`, and
+`rewards` must be explicitly set in train/play scripts (default `None` in cfg — raises error if
+unset). When `False`, dynamics are fixed at nominal values set in `__init__`. The eval environment
+samples from these exact ranges — training with DR forces the policy to be robust to dynamics
+mismatch.
 
 ---
 

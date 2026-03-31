@@ -97,6 +97,7 @@ def main():
         env_cfg.viewer.asset_name = "robot"
 
     env_cfg.is_train = False
+    env_cfg.domain_randomization = False
     env_cfg.max_motor_noise_std = 0.0
     env_cfg.seed = args_cli.seed
 
