@@ -2,6 +2,8 @@
 **/outputs/*
 **/wandb/*
 
+*.log
+
 # Python
 .DS_Store
 **/*.egg-info/
