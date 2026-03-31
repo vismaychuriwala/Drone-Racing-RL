@@ -297,6 +297,8 @@ class QuadcopterEnv(DirectRLEnv):
         # _n_gates_passed tracks absolute count (used for sin/cos obs encoding),
         # _gates_since_spawn tracks gates since last reset (used for lap detection).
         self._gates_since_spawn = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
+        # Step at which current lap started (reset on spawn and on each lap completion)
+        self._lap_start_step = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
         # Motor dynamics
         self.cfg.thrust_to_weight = 3.15
@@ -753,6 +755,10 @@ class QuadcopterEnv(DirectRLEnv):
             & (self._gates_since_spawn % n_gates == 0)
             & (self._gates_since_spawn > 0)
         )
+        # Reset lap timer for envs that just completed a lap
+        lap_done_ids = torch.where(self._lap_completed_this_step)[0]
+        if lap_done_ids.numel() > 0:
+            self._lap_start_step[lap_done_ids] = self.episode_length_buf[lap_done_ids].long()
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         drone_pose = self._robot.data.root_link_state_w[:, :3]

@@ -113,10 +113,10 @@ Configured in `train_race.py`:
 rewards = {
     'gate_cross_reward_scale':     5.0,   # sparse: per correct gate traversal
     'lap_complete_reward_scale':  25.0,   # sparse: flat reward per full lap
-    'lap_time_bonus':             25.0,   # sparse: extra lap reward for fast laps
-    'lap_target_time':            25.0,   # seconds — target lap time
-    'lap_time_constant':           5.0,   # seconds — decay steepness
-    'wrong_crossing_reward_scale': -2.0,  # sparse: wrong gate or wrong direction penalty
+    'lap_time_bonus':              3.0,   # sparse: extra lap reward for fast laps
+    'lap_target_time':            22.0,   # seconds — target lap time
+    'lap_time_constant':          10.0,   # seconds — decay steepness
+    'wrong_crossing_reward_scale': -1.0,  # sparse: wrong gate or wrong direction penalty
     'crash_reward_scale':       -0.005,   # dense: per-step contact, after 100-step grace
     'death_cost':                 -1.0,   # terminal: on episode death
     'progress_reward_scale':       0.1,   # dense: delta distance to gate center
@@ -124,8 +124,9 @@ rewards = {
 }
 ```
 
-**Balance:** crash-farm 7 gates + die = 35-1 = +34. Clean lap = 60+. ~2× better → prefers completion.
-Death cost is mild — policy won't be afraid to fly aggressively. Gate crossing does the heavy lifting.
+**Balance:** crash-farm 7 gates + die = 35-1 = +34. Clean lap = 35+25+3 = 63. ~1.9× better → prefers
+completion. Death cost is mild — policy won't be afraid to fly aggressively. Gate crossing does
+the heavy lifting.
 
 **Crash fires on gate-frame contact too** — kept very small (-0.005) to avoid penalizing gate brushes.
 
@@ -141,14 +142,14 @@ Oscillation is net negative (approach reward < retreat penalty for same displace
 Replaced velocity reward (which used fixed gate normal — broken when drone is past the gate,
 and equivalent to progress when fixed to use drone-to-gate direction).
 
-**Lap time bonus:** `bonus * exp((target_time - elapsed) / constant)`:
-- Lap at 10s: `25 * exp(3.0)` = 502 bonus (on top of flat 25)
-- Lap at 20s: `25 * exp(1.0)` = 67.9 bonus
-- Lap at 25s (target): `25 * exp(0)` = 25.0 bonus
-- Lap at 30s (timeout): `25 * exp(-1)` = 9.2 bonus
-- Total = flat 25 + time bonus. Slow laps still rewarded, fast laps substantially more.
+**Lap time bonus:** `bonus * exp((target_time - lap_elapsed) / constant)`:
+- Lap in 12s: `3 * exp(1.0)` = 8.2 bonus (on top of flat 25)
+- Lap in 22s (target): `3 * exp(0)` = 3.0 bonus
+- Lap in 32s: `3 * exp(-1)` = 1.1 bonus
+- Uses per-lap elapsed time (not episode time) — 2nd/3rd laps get fair timing.
+- Gentle decay (constant=10s) — slow laps still rewarded, fast laps moderately more.
 
-**Wrong crossing penalty (-2.0):** all 7 gates checked in one batched call per step. A crossing
+**Wrong crossing penalty (-1.0):** all 7 gates checked in one batched call per step. A crossing
 through the wrong gate (correct direction) or any gate in the wrong direction (x: -ve → +ve)
 is penalized. Only correct gate + correct direction advances `_idx_wp`.
 
@@ -289,5 +290,5 @@ Real fix was the `.squeeze(-1)` bug, not batch size.
 | Velocity reward (dot with gate normal) | Replaced by progress | Fixed gate normal is wrong when drone is past gate. Using drone-to-gate direction collapses to delta-distance (progress). Progress is simpler, cheaper, correct everywhere. |
 | LSTM/Transformer for longer rollouts | Deferred | Recurrence doesn't enable longer rollouts — BPTT still truncated at rollout boundary. Memory bottleneck same. Overkill given good obs design. |
 | KL-penalty PPO instead of clipped | Rejected | Needs extra β tuning. Adaptive KL LR schedule already gives most of benefit. |
-| Time-decaying lap bonus as primary speed signal | Deferred to phase 2 | Sparse + episodic — rarely seen in 24-step window. Non-stationary value function. Use dense velocity reward as primary. |
+| Time-decaying lap bonus as primary speed signal | Active (small scale) | Scale=3.0, constant=10s — gentle gradient. Uses per-lap timer, not episode time. Increase scale in phase 2 once laps reliable. |
 | Initial velocity at spawn in phase 1 | Deferred to phase 2 | Policy crashes immediately if it never learned to handle entry velocity. Add after base policy works. |

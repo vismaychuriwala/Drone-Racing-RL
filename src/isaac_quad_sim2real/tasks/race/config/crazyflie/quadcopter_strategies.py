@@ -37,6 +37,7 @@ class DefaultQuadcopterStrategy:
         # Initialize episode sums for logging if in training mode
         if self.cfg.is_train and hasattr(env, 'rew'):
             keys = [key.split("_reward_scale")[0] for key in env.rew.keys() if key.endswith("_reward_scale")]
+            keys.append("lap_time")  # lap_time reward has no _reward_scale config key
             self._episode_sums = {
                 key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
                 for key in keys
@@ -95,13 +96,14 @@ class DefaultQuadcopterStrategy:
         progress  = torch.where(progress >= 0, progress, progress * retreat_mult)
         self.env._last_distance_to_goal = dist_now.clone()
 
-        # Lap time bonus: exp((target - elapsed) / constant)
+        # Lap time bonus: exp((target - lap_elapsed) / constant)
         #   faster than target → exp(+) > 1 → extra reward
         #   at target          → exp(0) = 1 → full bonus
         #   slower than target → exp(-) < 1 → decaying toward zero
-        episode_time = self.env.episode_length_buf.float() * self.env.cfg.sim.dt * self.env.cfg.decimation
+        dt_step = self.env.cfg.sim.dt * self.env.cfg.decimation
+        lap_elapsed = (self.env.episode_length_buf.float() - self.env._lap_start_step.float()) * dt_step
         lap_time_bonus = self.env.rew['lap_time_bonus'] * torch.exp(
-            (self.env.rew['lap_target_time'] - episode_time) / self.env.rew['lap_time_constant']
+            (self.env.rew['lap_target_time'] - lap_elapsed) / self.env.rew['lap_time_constant']
         )
 
         # Crash: sustained contact force after a 100-step grace period
@@ -356,6 +358,7 @@ class DefaultQuadcopterStrategy:
         # _gates_since_spawn always starts at 0 → used for lap completion detection.
         self.env._n_gates_passed[env_ids] = waypoint_indices
         self.env._gates_since_spawn[env_ids] = 0
+        self.env._lap_start_step[env_ids] = 0
 
         # Write state to simulation
         self.env._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
@@ -371,8 +374,18 @@ class DefaultQuadcopterStrategy:
         )
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
+        # Initialize _prev_x_all_gates to actual x-positions relative to all gates
+        # so that the first step doesn't see a false +ve→-ve transition.
         if self.env._prev_x_all_gates is not None:
-            self.env._prev_x_all_gates[env_ids] = 1.0
+            n_gates = self.env._waypoints.shape[0]
+            drone_pos = self.env._robot.data.root_link_state_w[env_ids, :3]  # [n_reset, 3]
+            n_reset_ids = drone_pos.shape[0]
+            drone_exp    = drone_pos.unsqueeze(1).expand(-1, n_gates, -1).reshape(-1, 3)
+            gate_pos_exp = self.env._waypoints[:, :3].unsqueeze(0).expand(n_reset_ids, -1, -1).reshape(-1, 3)
+            gate_qat_exp = self.env._waypoints_quat.unsqueeze(0).expand(n_reset_ids, -1, -1).reshape(-1, 4)
+            pos_all, _ = subtract_frame_transforms(gate_pos_exp, gate_qat_exp, drone_exp)
+            pos_all = pos_all.reshape(n_reset_ids, n_gates, 3)
+            self.env._prev_x_all_gates[env_ids] = pos_all[:, :, 0]
 
         self.env._crashed[env_ids] = 0
 
