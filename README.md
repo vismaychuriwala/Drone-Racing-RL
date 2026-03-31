@@ -114,8 +114,8 @@ rewards = {
     'gate_cross_reward_scale':     5.0,   # sparse: per correct gate traversal
     'lap_complete_reward_scale':  25.0,   # sparse: flat reward per full lap
     'lap_time_bonus':              3.0,   # sparse: extra lap reward for fast laps
-    'lap_target_time':            22.0,   # seconds — target lap time
-    'lap_time_constant':          10.0,   # seconds — decay steepness
+    'lap_target_time':             7.0,   # seconds — target lap time
+    'lap_time_constant':           3.0,   # seconds — decay steepness
     'wrong_crossing_reward_scale': -1.0,  # sparse: wrong gate or wrong direction penalty
     'crash_reward_scale':       -0.005,   # dense: per-step contact, after 100-step grace
     'death_cost':                 -1.0,   # terminal: on episode death
@@ -143,11 +143,11 @@ Replaced velocity reward (which used fixed gate normal — broken when drone is 
 and equivalent to progress when fixed to use drone-to-gate direction).
 
 **Lap time bonus:** `bonus * exp((target_time - lap_elapsed) / constant)`:
-- Lap in 12s: `3 * exp(1.0)` = 8.2 bonus (on top of flat 25)
-- Lap in 22s (target): `3 * exp(0)` = 3.0 bonus
-- Lap in 32s: `3 * exp(-1)` = 1.1 bonus
+- Lap in 4s: `3 * exp(1.0)` = 8.2 bonus (on top of flat 25)
+- Lap in 7s (target): `3 * exp(0)` = 3.0 bonus
+- Lap in 10s: `3 * exp(-1)` = 1.1 bonus
 - Uses per-lap elapsed time (not episode time) — 2nd/3rd laps get fair timing.
-- Gentle decay (constant=10s) — slow laps still rewarded, fast laps moderately more.
+- 30s episode fits ~3 laps at target pace. Constant=3s gives moderate decay.
 
 **Wrong crossing penalty (-1.0):** all 7 gates checked in one batched call per step. A crossing
 through the wrong gate (correct direction) or any gate in the wrong direction (x: -ve → +ve)
@@ -290,5 +290,5 @@ Real fix was the `.squeeze(-1)` bug, not batch size.
 | Velocity reward (dot with gate normal) | Replaced by progress | Fixed gate normal is wrong when drone is past gate. Using drone-to-gate direction collapses to delta-distance (progress). Progress is simpler, cheaper, correct everywhere. |
 | LSTM/Transformer for longer rollouts | Deferred | Recurrence doesn't enable longer rollouts — BPTT still truncated at rollout boundary. Memory bottleneck same. Overkill given good obs design. |
 | KL-penalty PPO instead of clipped | Rejected | Needs extra β tuning. Adaptive KL LR schedule already gives most of benefit. |
-| Time-decaying lap bonus as primary speed signal | Active (small scale) | Scale=3.0, constant=10s — gentle gradient. Uses per-lap timer, not episode time. Increase scale in phase 2 once laps reliable. |
+| Time-decaying lap bonus as primary speed signal | Active (small scale) | Scale=3.0, target=7s, constant=3s. Uses per-lap timer, not episode time. Increase scale in phase 2 once laps reliable. |
 | Initial velocity at spawn in phase 1 | Deferred to phase 2 | Policy crashes immediately if it never learned to handle entry velocity. Add after base policy works. |
