@@ -147,6 +147,10 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     spawn_vertical:    float = 0.2    # ±vertical offset from gate center (m)
     spawn_yaw_noise:   float = 0.3    # ±yaw perturbation (rad)
     spawn_vel_max:     float = 0.0    # max initial forward velocity toward gate (m/s); 0 = disabled
+
+    # Domain randomization: sample dynamics per episode from eval ranges
+    domain_randomization: bool = False
+
     debug_vis = True
 
     sim_rate_hz = 500
@@ -286,8 +290,9 @@ class QuadcopterEnv(DirectRLEnv):
         self._crashed = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
         # Gate crossing state — populated by _update_gate_state() each step
-        self._gate_crossed_this_step  = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        self._lap_completed_this_step = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._gate_crossed_this_step   = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._lap_completed_this_step  = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._wrong_crossing_this_step = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # Separate lap counter: always starts at 0 on reset, independent of spawn gate.
         # _n_gates_passed tracks absolute count (used for sin/cos obs encoding),
         # _gates_since_spawn tracks gates since last reset (used for lap detection).
@@ -360,6 +365,9 @@ class QuadcopterEnv(DirectRLEnv):
         # Initialize other state variables
         self._pose_drone_wrt_gate = torch.zeros(self.num_envs, 3, device=self.device)
         self._prev_x_drone_wrt_gate = torch.ones(self.num_envs, device=self.device)
+        # x-component of drone position relative to ALL gates, for wrong-crossing detection
+        # Initialized lazily in _update_gate_state once _waypoints exists
+        self._prev_x_all_gates = None
         self._initial_wp = 0
         self._n_run = 0
 
@@ -677,46 +685,71 @@ class QuadcopterEnv(DirectRLEnv):
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
 
     def _update_gate_state(self, drone_pose: torch.Tensor):
-        """Detect direction-enforced gate crossings and advance _idx_wp.
+        """Detect gate crossings across ALL gates and advance _idx_wp.
 
         Called at the top of _get_dones so that _pose_drone_wrt_gate (computed
         immediately after), rewards, and observations all reference the correct
         target gate within the same timestep — no one-step lag.
 
-        A crossing is valid when:
-          1. x in gate frame flips from positive (approach side) to negative
-          2. Drone is within the gate opening (|y| < half, |z| < half)
+        Checks all 7 gates in one batched call. Classifies crossings as:
+          - good_cross:  correct gate, correct direction (x: +ve → -ve, within bounds)
+          - wrong_cross: wrong gate or wrong direction
         """
+        N         = self.num_envs
         n_gates   = self._waypoints.shape[0]
         gate_half = self.cfg.gate_model.gate_side / 2.0
 
-        # Position relative to current gate with the OLD _idx_wp
-        pos_wrt_gate, _ = subtract_frame_transforms(
-            self._waypoints[self._idx_wp, :3],
-            self._waypoints_quat[self._idx_wp, :],
-            drone_pose
-        )
-        x_now = pos_wrt_gate[:, 0]
-        y_now = pos_wrt_gate[:, 1]
-        z_now = pos_wrt_gate[:, 2]
+        # Lazy init _prev_x_all_gates (needs n_gates from _waypoints)
+        if self._prev_x_all_gates is None:
+            self._prev_x_all_gates = torch.ones(N, n_gates, device=self.device)
 
-        within_gate = (torch.abs(y_now) < gate_half) & (torch.abs(z_now) < gate_half)
-        crossed     = (self._prev_x_drone_wrt_gate > 0) & (x_now <= 0) & within_gate
+        # --- Compute drone position relative to ALL gates in one batch ---
+        # Expand: [N, n_gates, 3] → [N*n_gates, 3]
+        drone_exp    = drone_pose.unsqueeze(1).expand(-1, n_gates, -1).reshape(-1, 3)
+        gate_pos_exp = self._waypoints[:, :3].unsqueeze(0).expand(N, -1, -1).reshape(-1, 3)
+        gate_qat_exp = self._waypoints_quat.unsqueeze(0).expand(N, -1, -1).reshape(-1, 4)
 
-        ids_crossed = torch.where(crossed)[0]
+        pos_all, _ = subtract_frame_transforms(gate_pos_exp, gate_qat_exp, drone_exp)
+        pos_all    = pos_all.reshape(N, n_gates, 3)   # [N, 7, 3]
+
+        x_all = pos_all[:, :, 0]                       # [N, 7]
+        within_all = (pos_all[:, :, 1].abs() < gate_half) & (pos_all[:, :, 2].abs() < gate_half)
+
+        # Forward crossing: x flips +ve → -ve (correct approach direction)
+        fwd_cross = (self._prev_x_all_gates > 0) & (x_all <= 0) & within_all   # [N, 7]
+        # Backward crossing: x flips -ve → +ve (wrong direction)
+        bwd_cross = (self._prev_x_all_gates <= 0) & (x_all > 0) & within_all   # [N, 7]
+
+        # Which gate is the target per env?
+        target_mask = torch.zeros(N, n_gates, dtype=torch.bool, device=self.device)
+        target_mask.scatter_(1, self._idx_wp.long().unsqueeze(1), True)          # [N, 7]
+
+        # Classify
+        good_cross  = (fwd_cross & target_mask).any(dim=1)    # [N] correct gate + correct dir
+        wrong_cross = (
+            (fwd_cross & ~target_mask)   # correct dir but wrong gate
+            | bwd_cross                  # any gate, wrong dir
+        ).any(dim=1)                                           # [N]
+
+        self._prev_x_all_gates = x_all.clone()
+
+        # Advance gate index + counters for good crossings only
+        ids_crossed = torch.where(good_cross)[0]
         if ids_crossed.numel() > 0:
             self._idx_wp[ids_crossed]             = (self._idx_wp[ids_crossed] + 1) % n_gates
             self._n_gates_passed[ids_crossed]     += 1
             self._gates_since_spawn[ids_crossed]  += 1
             self._desired_pos_w[ids_crossed, :3]  = self._waypoints[self._idx_wp[ids_crossed], :3]
 
-        self._prev_x_drone_wrt_gate = x_now.clone()
+        # Also update single-gate prev_x for backwards compat (used in reset_idx init)
+        self._prev_x_drone_wrt_gate = x_all[torch.arange(N, device=self.device), self._idx_wp.long()]
 
-        self._gate_crossed_this_step  = crossed
+        self._gate_crossed_this_step   = good_cross
+        self._wrong_crossing_this_step = wrong_cross
         # Use _gates_since_spawn (always starts at 0) for lap detection,
         # NOT _n_gates_passed (which starts at waypoint_indices for obs encoding).
         self._lap_completed_this_step = (
-            crossed
+            good_cross
             & (self._gates_since_spawn % n_gates == 0)
             & (self._gates_since_spawn > 0)
         )

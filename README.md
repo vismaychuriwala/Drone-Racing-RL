@@ -112,7 +112,11 @@ Configured in `train_race.py`:
 ```python
 rewards = {
     'gate_cross_reward_scale':     5.0,   # sparse: per correct gate traversal
-    'lap_complete_reward_scale':  25.0,   # sparse: full lap (all 7 gates)
+    'lap_complete_reward_scale':  25.0,   # sparse: flat reward per full lap
+    'lap_time_bonus':             25.0,   # sparse: extra lap reward for fast laps
+    'lap_target_time':            25.0,   # seconds — target lap time
+    'lap_time_constant':           5.0,   # seconds — decay steepness
+    'wrong_crossing_reward_scale': -2.0,  # sparse: wrong gate or wrong direction penalty
     'crash_reward_scale':       -0.005,   # dense: per-step contact, after 100-step grace
     'death_cost':                 -1.0,   # terminal: on episode death
     'progress_reward_scale':       0.1,   # dense: delta distance to gate center
@@ -120,7 +124,7 @@ rewards = {
 }
 ```
 
-**Balance:** crash-farm 7 gates + die = 35-1 = +34. Clean lap = 60. ~2× better → prefers completion.
+**Balance:** crash-farm 7 gates + die = 35-1 = +34. Clean lap = 60+. ~2× better → prefers completion.
 Death cost is mild — policy won't be afraid to fly aggressively. Gate crossing does the heavy lifting.
 
 **Crash fires on gate-frame contact too** — kept very small (-0.005) to avoid penalizing gate brushes.
@@ -136,6 +140,17 @@ Oscillation is net negative (approach reward < retreat penalty for same displace
 
 Replaced velocity reward (which used fixed gate normal — broken when drone is past the gate,
 and equivalent to progress when fixed to use drone-to-gate direction).
+
+**Lap time bonus:** `bonus * exp((target_time - elapsed) / constant)`:
+- Lap at 10s: `25 * exp(3.0)` = 502 bonus (on top of flat 25)
+- Lap at 20s: `25 * exp(1.0)` = 67.9 bonus
+- Lap at 25s (target): `25 * exp(0)` = 25.0 bonus
+- Lap at 30s (timeout): `25 * exp(-1)` = 9.2 bonus
+- Total = flat 25 + time bonus. Slow laps still rewarded, fast laps substantially more.
+
+**Wrong crossing penalty (-2.0):** all 7 gates checked in one batched call per step. A crossing
+through the wrong gate (correct direction) or any gate in the wrong direction (x: -ve → +ve)
+is penalized. Only correct gate + correct direction advances `_idx_wp`.
 
 ---
 
@@ -198,6 +213,24 @@ Enable phase 2. Simulates carry-over speed from previous gate exit.
 
 ---
 
+## Domain Randomization
+
+**Active** (`env_cfg.domain_randomization = True` in `train_race.py`). Per-episode sampling in
+`reset_idx` from the eval ranges specified in the project handout:
+
+```
+Aerodynamics:  k_aero_xy × [0.5, 2.0],  k_aero_z × [0.5, 2.0]
+TWR:           thrust_to_weight × [0.95, 1.05]
+PID roll/pitch: kp × [0.85, 1.15],  ki × [0.85, 1.15],  kd × [0.70, 1.30]
+PID yaw:        kp × [0.85, 1.15],  ki × [0.85, 1.15],  kd × [0.70, 1.30]
+```
+
+Each reset env gets independently sampled dynamics. When `domain_randomization=False` (default
+in cfg), dynamics are fixed at nominal values set in `__init__`. The eval environment samples
+from these exact ranges — training with them forces the policy to be robust to dynamics mismatch.
+
+---
+
 ## PPO (`ppo.py update()`)
 
 ```python
@@ -226,14 +259,12 @@ Real fix was the `.squeeze(-1)` bug, not batch size.
 ## Planned Extensions
 
 ### Phase 2 — after base policy completes laps
-- Enable `velocity_reward_scale = 0.3–1.0`
-- Time-decaying lap bonus: `flat_lap + speed_bonus * exp(-t/T)`, T ≈ target lap time. Keep flat floor so slow completion still rewarded. Don't replace velocity reward — add on top.
 - Gate-centering reward: penalize `y² + z²` at crossing moment
 - Smoothness penalty: `(a_t - a_{t-1})².sum()`, scale ~0.01
 - Alive bonus: +0.01/step
+- Tune `lap_time_bonus` / `lap_target_time` / `lap_time_constant` once laps are reliable
 
 ### Phase 3 — robustness
-- **Domain randomization per episode (highest priority):** sample `k_aero`, PID gains from eval ranges in `reset_idx`. Eval randomizes ±2× aero, ±15-30% PID. Currently fixed at nominal.
 - Observation noise: Gaussian noise on obs at train time
 - Increase `num_steps_per_env` 24→48 or 96. Reduce `num_envs` proportionally.
 - Entropy annealing: `entropy_coef` 0.005 → 0 over training

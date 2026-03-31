@@ -82,8 +82,9 @@ class DefaultQuadcopterStrategy:
         # which runs at the top of _get_dones — before this call and before
         # _get_observations, so _idx_wp and _pose_drone_wrt_gate are already
         # correct for the current gate when we get here.
-        crossed       = self.env._gate_crossed_this_step
-        lap_completed = self.env._lap_completed_this_step
+        crossed        = self.env._gate_crossed_this_step
+        lap_completed  = self.env._lap_completed_this_step
+        wrong_crossing = self.env._wrong_crossing_this_step
 
         # Progress reward: delta distance to current gate center.
         # Positive when closing distance, negative when retreating.
@@ -94,6 +95,15 @@ class DefaultQuadcopterStrategy:
         progress  = torch.where(progress >= 0, progress, progress * retreat_mult)
         self.env._last_distance_to_goal = dist_now.clone()
 
+        # Lap time bonus: exp((target - elapsed) / constant)
+        #   faster than target → exp(+) > 1 → extra reward
+        #   at target          → exp(0) = 1 → full bonus
+        #   slower than target → exp(-) < 1 → decaying toward zero
+        episode_time = self.env.episode_length_buf.float() * self.env.cfg.sim.dt * self.env.cfg.decimation
+        lap_time_bonus = self.env.rew['lap_time_bonus'] * torch.exp(
+            (self.env.rew['lap_target_time'] - episode_time) / self.env.rew['lap_time_constant']
+        )
+
         # Crash: sustained contact force after a 100-step grace period
         contact_forces = self.env._contact_sensor.data.net_forces_w
         crashed = (torch.norm(contact_forces, dim=-1) > 1e-8).squeeze(1).int()
@@ -103,13 +113,17 @@ class DefaultQuadcopterStrategy:
         if self.cfg.is_train:
             rewards = {
                 # Sparse: +reward each time drone correctly traverses a gate
-                "gate_cross":   crossed.float()       * self.env.rew['gate_cross_reward_scale'],
-                # Sparse: large +reward on completing a full lap
-                "lap_complete": lap_completed.float() * self.env.rew['lap_complete_reward_scale'],
+                "gate_cross":      crossed.float()        * self.env.rew['gate_cross_reward_scale'],
+                # Sparse: flat +reward on completing a full lap
+                "lap_complete":    lap_completed.float()   * self.env.rew['lap_complete_reward_scale'],
+                # Sparse: extra lap reward — higher for faster laps
+                "lap_time":        lap_completed.float()   * lap_time_bonus,
+                # Sparse: penalty for wrong gate or wrong direction crossing
+                "wrong_crossing":  wrong_crossing.float()  * self.env.rew['wrong_crossing_reward_scale'],
                 # Dense negative: penalise contact each step (after grace period)
-                "crash":        crashed.float()       * self.env.rew['crash_reward_scale'],
-                # Dense: delta distance to gate — inactive (coeff=0), enable for lap time opt
-                "progress":     progress              * self.env.rew['progress_reward_scale'],
+                "crash":           crashed.float()         * self.env.rew['crash_reward_scale'],
+                # Dense: delta distance to gate
+                "progress":        progress                * self.env.rew['progress_reward_scale'],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(self.env.reset_terminated,
@@ -357,5 +371,31 @@ class DefaultQuadcopterStrategy:
         )
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
+        if self.env._prev_x_all_gates is not None:
+            self.env._prev_x_all_gates[env_ids] = 1.0
 
         self.env._crashed[env_ids] = 0
+
+        # --- Domain randomization: sample dynamics per episode from eval ranges ---
+        if self.cfg.domain_randomization:
+            n = len(env_ids)
+            cfg = self.cfg
+            def _u(lo, hi):
+                return torch.empty(n, device=self.device).uniform_(lo, hi)
+
+            # Aerodynamics: ±2× nominal
+            self.env._K_aero[env_ids, :2] = _u(cfg.k_aero_xy * 0.5, cfg.k_aero_xy * 2.0).unsqueeze(1)
+            self.env._K_aero[env_ids, 2]  = _u(cfg.k_aero_z * 0.5,  cfg.k_aero_z * 2.0)
+
+            # TWR: ±5%
+            self.env._thrust_to_weight[env_ids] = _u(cfg.thrust_to_weight * 0.95, cfg.thrust_to_weight * 1.05)
+
+            # PID roll/pitch: kp ±15%, ki ±15%, kd ±30%
+            self.env._kp_omega[env_ids, :2] = _u(cfg.kp_omega_rp * 0.85, cfg.kp_omega_rp * 1.15).unsqueeze(1)
+            self.env._ki_omega[env_ids, :2] = _u(cfg.ki_omega_rp * 0.85, cfg.ki_omega_rp * 1.15).unsqueeze(1)
+            self.env._kd_omega[env_ids, :2] = _u(cfg.kd_omega_rp * 0.70, cfg.kd_omega_rp * 1.30).unsqueeze(1)
+
+            # PID yaw: kp ±15%, ki ±15%, kd ±30%
+            self.env._kp_omega[env_ids, 2] = _u(cfg.kp_omega_y * 0.85, cfg.kp_omega_y * 1.15)
+            self.env._ki_omega[env_ids, 2] = _u(cfg.ki_omega_y * 0.85, cfg.ki_omega_y * 1.15)
+            self.env._kd_omega[env_ids, 2] = _u(cfg.kd_omega_y * 0.70, cfg.kd_omega_y * 1.30)
