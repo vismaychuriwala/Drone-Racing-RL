@@ -95,8 +95,21 @@ class DefaultQuadcopterStrategy:
         # `progress_cap` is tuneable; start with 2.0 m.
         progress_cap = 2.0
         curr_x = self.env._pose_drone_wrt_gate[:, 0]
+
+        # Fix: when an env crossed a gate this step, _idx_wp was advanced
+        # before get_rewards() runs, so _pose_drone_wrt_gate is relative to
+        # the NEW gate while _last_distance_to_goal still holds the value
+        # measured to the OLD gate. Replace last_x for crossed envs with
+        # the current x to avoid a spurious large negative progress spike.
+        last_x = self.env._last_distance_to_goal.clone()
+        try:
+            crossed_mask = crossed.bool()
+        except Exception:
+            crossed_mask = (crossed > 0)
+        last_x[crossed_mask] = curr_x[crossed_mask]
+
         curr_x_c = torch.clamp(curr_x, max=progress_cap)
-        last_x_c = torch.clamp(self.env._last_distance_to_goal, max=progress_cap)
+        last_x_c = torch.clamp(last_x, max=progress_cap)
         # progress = +ve when moving forward (increasing x toward/through gate)
         progress = curr_x_c - last_x_c
         retreat_mult = self.env.rew['progress_retreat_multiplier']
