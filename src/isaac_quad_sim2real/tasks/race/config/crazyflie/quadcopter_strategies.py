@@ -66,28 +66,47 @@ class DefaultQuadcopterStrategy:
         self.env._thrust_to_weight[:] = self.env._twr_value
 
     def get_rewards(self) -> torch.Tensor:
-        """get_rewards() is called per timestep. This is where you define your reward structure and compute them
-        according to the reward scales you tune in train_race.py. The following is an example reward structure that
-        causes the drone to hover near the zeroth gate. It will not produce a racing policy, but simply serves as proof
-        if your PPO implementation works. You should delete it or heavily modify it once you begin the racing task."""
 
-        # TODO ----- START ----- Define the tensors required for your custom reward structure
-        # check to change waypoint
-        dist_to_gate = torch.linalg.norm(self.env._pose_drone_wrt_gate, dim=1)
-        gate_passed = dist_to_gate < 0.1
-        ids_gate_passed = torch.where(gate_passed)[0]
-        self.env._idx_wp[ids_gate_passed] = (self.env._idx_wp[ids_gate_passed] + 1) % self.env._waypoints.shape[0]
+        if not self.cfg.is_train:
+            return torch.zeros(self.num_envs, device=self.device)
 
-        # set desired positions in the world frame
-        self.env._desired_pos_w[ids_gate_passed, :2] = self.env._waypoints[self.env._idx_wp[ids_gate_passed], :2]
-        self.env._desired_pos_w[ids_gate_passed, 2] = self.env._waypoints[self.env._idx_wp[ids_gate_passed], 2]
 
-        # calculate progress via distance to goal
-        distance_to_goal = torch.linalg.norm(self.env._desired_pos_w - self.env._robot.data.root_link_pos_w, dim=1)
-        distance_to_goal = torch.tanh(distance_to_goal/3.0)
-        progress = 1 - distance_to_goal  # distance_to_goal is between 0 and 1 where 0 means the drone reached the goal
+        # Gate crossing and lap completion are computed in env._update_gate_state()
+        # which runs at the top of _get_dones — before this call and before
+        # _get_observations, so _idx_wp and _pose_drone_wrt_gate are already
+        # correct for the current gate when we get here.
+        crossed        = self.env._gate_crossed_this_step
+        lap_completed  = self.env._lap_completed_this_step
+        wrong_crossing = self.env._wrong_crossing_this_step
 
-        # compute crashed environments if contact detected for 100 timesteps
+        # Progress reward: change in forward-axis (gate-frame x) to current gate center.
+        # Use gate-frame x (index 0) so forward motion toward the gate yields positive
+        # progress even when vertical/sideways motion increases Euclidean distance.
+        # Retreat penalized retreat_mult× harder so oscillation is net negative.
+        # Cap forward x to avoid unbounded progress after passing the gate.
+        # `progress_cap` is tuneable; start with 2.0 m.
+        progress_cap = 2.0
+        curr_x = self.env._pose_drone_wrt_gate[:, 0]
+        curr_x_c = torch.clamp(curr_x, max=progress_cap)
+        last_x_c = torch.clamp(self.env._last_distance_to_goal, max=progress_cap)
+        # progress = +ve when moving forward (increasing x toward/through gate)
+        progress = curr_x_c - last_x_c
+        retreat_mult = self.env.rew['progress_retreat_multiplier']
+        progress = torch.where(progress >= 0, progress, progress * retreat_mult)
+        # Keep real curr_x in _last_distance_to_goal so future checks use true pose
+        self.env._last_distance_to_goal = curr_x.clone()
+
+        # Lap time bonus: exp((target - lap_elapsed) / constant)
+        #   faster than target → exp(+) > 1 → extra reward
+        #   at target          → exp(0) = 1 → full bonus
+        #   slower than target → exp(-) < 1 → decaying toward zero
+        # Uses _lap_elapsed snapshot taken in _update_gate_state BEFORE the
+        # lap timer is reset, so we see the actual lap duration.
+        lap_time_bonus = self.env.rew['lap_time_bonus'] * torch.exp(
+            (self.env.rew['lap_target_time'] - self.env._lap_elapsed) / self.env.rew['lap_time_constant']
+        )
+
+        # Crash: sustained contact force after a 100-step grace period
         contact_forces = self.env._contact_sensor.data.net_forces_w
         crashed = (torch.norm(contact_forces, dim=-1) > 1e-8).squeeze(1).int()
         mask = (self.env.episode_length_buf > 100).int()
@@ -317,6 +336,10 @@ class DefaultQuadcopterStrategy:
             self.env._waypoints_quat[self.env._idx_wp[env_ids], :],
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
+
+        # Init _last_distance_to_goal from gate-frame forward-axis x so the
+        # progress term reflects forward motion along the gate approach axis.
+        self.env._last_distance_to_goal[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0].clone()
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
 
