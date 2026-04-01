@@ -115,12 +115,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # Sparse: per correctly traversed gate (direction-enforced, within bounds)
         'gate_cross_reward_scale':      5.0,
         # Sparse: flat reward on completing a full lap (all 7 gates)
-        'lap_complete_reward_scale':    0.0,
+        'lap_complete_reward_scale':    25.0,
         # Sparse: extra lap bonus — exp((target - elapsed) / constant)
         #   faster than target → bonus > lap_time_bonus, slower → decays toward 0
         'lap_time_bonus':               0.0,
-        'lap_target_time':              7.0,    # seconds — target lap time
-        'lap_time_constant':            3.0,    # seconds — controls decay steepness
+        'lap_target_time':              0.0,    # seconds — target lap time
+        'lap_time_constant':            0.0,    # seconds — controls decay steepness
         # Sparse: penalty for wrong gate or wrong direction crossing
         'wrong_crossing_reward_scale':  -1.0,
         # Small per-step contact penalty
