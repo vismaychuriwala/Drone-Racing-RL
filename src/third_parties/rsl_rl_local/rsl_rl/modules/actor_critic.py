@@ -117,7 +117,7 @@ class ActorCritic(nn.Module):
         mean = self.actor(observations)
         # compute standard deviation
         if self.noise_std_type == "scalar":
-            std = torch.max(torch.tensor(self.min_std), self.std).expand_as(mean)
+            std = torch.clamp(self.std, min=self.min_std).expand_as(mean)
         elif self.noise_std_type == "log":
             std = torch.exp(self.log_std).expand_as(mean)
         else:
