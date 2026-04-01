@@ -87,14 +87,22 @@ class DefaultQuadcopterStrategy:
         lap_completed  = self.env._lap_completed_this_step
         wrong_crossing = self.env._wrong_crossing_this_step
 
-        # Progress reward: delta distance to current gate center.
-        # Positive when closing distance, negative when retreating.
-        # Retreat penalized retreat_mult× harder so any oscillation is net negative.
-        dist_now  = torch.linalg.norm(self.env._pose_drone_wrt_gate, dim=1)
-        progress  = self.env._last_distance_to_goal - dist_now  # +ve = approaching
+        # Progress reward: change in forward-axis (gate-frame x) to current gate center.
+        # Use gate-frame x (index 0) so forward motion toward the gate yields positive
+        # progress even when vertical/sideways motion increases Euclidean distance.
+        # Retreat penalized retreat_mult× harder so oscillation is net negative.
+        # Cap forward x to avoid unbounded progress after passing the gate.
+        # `progress_cap` is tuneable; start with 2.0 m.
+        progress_cap = 2.0
+        curr_x = self.env._pose_drone_wrt_gate[:, 0]
+        curr_x_c = torch.clamp(curr_x, max=progress_cap)
+        last_x_c = torch.clamp(self.env._last_distance_to_goal, max=progress_cap)
+        # progress = +ve when moving forward (increasing x toward/through gate)
+        progress = curr_x_c - last_x_c
         retreat_mult = self.env.rew['progress_retreat_multiplier']
-        progress  = torch.where(progress >= 0, progress, progress * retreat_mult)
-        self.env._last_distance_to_goal = dist_now.clone()
+        progress = torch.where(progress >= 0, progress, progress * retreat_mult)
+        # Keep real curr_x in _last_distance_to_goal so future checks use true pose
+        self.env._last_distance_to_goal = curr_x.clone()
 
         # Lap time bonus: exp((target - lap_elapsed) / constant)
         #   faster than target → exp(+) > 1 → extra reward
@@ -370,11 +378,9 @@ class DefaultQuadcopterStrategy:
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
 
-        # Init _last_distance_to_goal from 3D gate-frame distance (consistent
-        # with how progress reward computes dist_now in get_rewards).
-        self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
-            self.env._pose_drone_wrt_gate[env_ids], dim=1
-        )
+        # Init _last_distance_to_goal from gate-frame forward-axis x so the
+        # progress term reflects forward motion along the gate approach axis.
+        self.env._last_distance_to_goal[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0].clone()
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
         # Initialize _prev_x_all_gates to actual x-positions relative to all gates
