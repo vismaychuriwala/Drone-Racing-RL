@@ -761,6 +761,11 @@ class QuadcopterEnv(DirectRLEnv):
             & (self._gates_since_spawn % n_gates == 0)
             & (self._gates_since_spawn > 0)
         )
+        # Snapshot elapsed lap time BEFORE resetting the timer so get_rewards
+        # sees the actual lap duration, not zero.
+        dt_step = self.cfg.sim.dt * self.cfg.decimation
+        self._lap_elapsed = (self.episode_length_buf.float() - self._lap_start_step.float()) * dt_step
+
         # Reset lap timer for envs that just completed a lap
         lap_done_ids = torch.where(self._lap_completed_this_step)[0]
         if lap_done_ids.numel() > 0:

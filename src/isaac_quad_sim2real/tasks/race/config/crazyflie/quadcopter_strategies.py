@@ -100,10 +100,10 @@ class DefaultQuadcopterStrategy:
         #   faster than target → exp(+) > 1 → extra reward
         #   at target          → exp(0) = 1 → full bonus
         #   slower than target → exp(-) < 1 → decaying toward zero
-        dt_step = self.env.cfg.sim.dt * self.env.cfg.decimation
-        lap_elapsed = (self.env.episode_length_buf.float() - self.env._lap_start_step.float()) * dt_step
+        # Uses _lap_elapsed snapshot taken in _update_gate_state BEFORE the
+        # lap timer is reset, so we see the actual lap duration.
         lap_time_bonus = self.env.rew['lap_time_bonus'] * torch.exp(
-            (self.env.rew['lap_target_time'] - lap_elapsed) / self.env.rew['lap_time_constant']
+            (self.env.rew['lap_target_time'] - self.env._lap_elapsed) / self.env.rew['lap_time_constant']
         )
 
         # Crash: sustained contact force after a 100-step grace period
