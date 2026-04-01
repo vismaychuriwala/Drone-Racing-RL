@@ -115,10 +115,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # Sparse: per correctly traversed gate (direction-enforced, within bounds)
         'gate_cross_reward_scale':      5.0,
         # Sparse: flat reward on completing a full lap (all 7 gates)
-        'lap_complete_reward_scale':    0.0,
+        'lap_complete_reward_scale':    25.0,
         # Sparse: extra lap bonus — exp((target - elapsed) / constant)
         #   faster than target → bonus > lap_time_bonus, slower → decays toward 0
-        'lap_time_bonus':               0.0,
+        'lap_time_bonus':               1.0,
         'lap_target_time':              7.0,    # seconds — target lap time
         'lap_time_constant':            3.0,    # seconds — controls decay steepness
         # Sparse: penalty for wrong gate or wrong direction crossing
@@ -130,13 +130,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # Dense: delta distance to gate
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
         'progress_reward_scale':        0.1,
-        'progress_retreat_multiplier':  1.5,
+        'progress_retreat_multiplier':  1.005,
     }
     # TODO ----- END -----
 
     env_cfg.is_train = True
     env_cfg.rewards = rewards
-    env_cfg.domain_randomization = False
+    env_cfg.domain_randomization = True
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None, rewards=rewards)
