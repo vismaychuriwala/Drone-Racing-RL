@@ -112,6 +112,8 @@ class DefaultQuadcopterStrategy:
         last_x_c = torch.clamp(last_x, max=progress_cap)
         # progress = +ve when moving forward (increasing x toward/through gate)
         progress = curr_x_c - last_x_c
+        pos_wrt_gate = self.env._pose_drone_wrt_gate
+        yz_excursion = pos_wrt_gate[:, 1] ** 2 + pos_wrt_gate[:, 2] ** 2
         retreat_mult = self.env.rew['progress_retreat_multiplier']
         progress = torch.where(progress >= 0, progress, progress * retreat_mult)
         # Keep real curr_x in _last_distance_to_goal so future checks use true pose
@@ -147,6 +149,7 @@ class DefaultQuadcopterStrategy:
                 "crash":           crashed.float()         * self.env.rew['crash_reward_scale'],
                 # Dense: delta distance to gate
                 "progress":        progress                * self.env.rew['progress_reward_scale'],
+                "yz_excursion": -yz_excursion * self.env.rew['yz_excursion_reward_scale'],
             }
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(self.env.reset_terminated,
