@@ -115,7 +115,8 @@ class DefaultQuadcopterStrategy:
         return reward
 
     def get_observations(self) -> Dict[str, torch.Tensor]:
-        """Observation vector (25 dims):
+        """Observation vector (28 dims):
+            pos_w             (3)  — world position
             lin_vel_b         (3)  — linear velocity in body frame
             ang_vel_b         (3)  — body rates (roll/pitch/yaw rate)
             quat_w            (4)  — orientation quaternion in world frame
@@ -132,6 +133,7 @@ class DefaultQuadcopterStrategy:
         rot_w2b = matrix_from_quat(quat_w).transpose(-1, -2)  # world → body [N,3,3]
 
         # --- Core drone state ---
+        pos_w     = self.env._robot.data.root_link_pos_w       # [N, 3]
         lin_vel_b = self.env._robot.data.root_com_lin_vel_b    # [N, 3]
         ang_vel_b = self.env._robot.data.root_ang_vel_b        # [N, 3]
 
@@ -163,6 +165,7 @@ class DefaultQuadcopterStrategy:
         gate_cos  = torch.cos(angle).unsqueeze(1)                       # [N, 1]
 
         obs = torch.cat([
+            pos_w,              # (3) world position
             lin_vel_b,          # (3)
             ang_vel_b,          # (3)
             quat_w,             # (4)
