@@ -115,15 +115,15 @@ class DefaultQuadcopterStrategy:
         return reward
 
     def get_observations(self) -> Dict[str, torch.Tensor]:
-        """Observation vector (28 dims):
+        """Observation vector (27 dims):
             pos_w             (3)  — world position
             lin_vel_b         (3)  — linear velocity in body frame
             ang_vel_b         (3)  — body rates (roll/pitch/yaw rate)
             quat_w            (4)  — orientation quaternion in world frame
-            pos_wrt_gate      (3)  — drone position in current gate frame
-            next_gate_in_gate (3)  — next gate position in current gate frame (lookahead)
+            prev_gate_rel_w   (3)  — vector from drone to previous gate in world frame
+            gate_rel_w        (3)  — vector from drone to current gate in world frame
+            next_gate_rel_w   (3)  — vector from drone to next gate in world frame
             gate_normal_w     (3)  — current gate approach normal in world frame
-            prev_actions      (num_prev_action_steps * 4)  — action history, oldest first
             target_gate_phase (2)  — (sin, cos) of target gate index, periodic across boundary
         """
         n_gates   = self.env._waypoints.shape[0]
@@ -134,24 +134,20 @@ class DefaultQuadcopterStrategy:
         lin_vel_b = self.env._robot.data.root_com_lin_vel_b    # [N, 3]
         ang_vel_b = self.env._robot.data.root_ang_vel_b        # [N, 3]
 
-        # --- Current gate relative position (already in gate frame) ---
-        pos_wrt_gate = self.env._pose_drone_wrt_gate           # [N, 3]
+        # --- Gate positions relative to drone in world frame ---
+        prev_idx        = (self.env._idx_wp - 1) % n_gates
+        prev_gate_pos_w = self.env._waypoints[prev_idx, :3]            # [N, 3]
+        prev_gate_rel_w = prev_gate_pos_w - pos_w                      # [N, 3]
 
-        # --- Next gate position in current gate frame ---
-        next_idx          = (self.env._idx_wp + 1) % n_gates
-        curr_gate_pos_w   = self.env._waypoints[self.env._idx_wp, :3]   # [N, 3]
-        curr_gate_quat_w  = self.env._waypoints_quat[self.env._idx_wp]  # [N, 4]
-        next_gate_pos_w   = self.env._waypoints[next_idx, :3]           # [N, 3]
-        next_gate_in_gate, _ = subtract_frame_transforms(
-            curr_gate_pos_w, curr_gate_quat_w, next_gate_pos_w
-        )                                                                # [N, 3]
+        curr_gate_pos_w = self.env._waypoints[self.env._idx_wp, :3]    # [N, 3]
+        gate_rel_w      = curr_gate_pos_w - pos_w                      # [N, 3]
+
+        next_idx        = (self.env._idx_wp + 1) % n_gates
+        next_gate_pos_w = self.env._waypoints[next_idx, :3]            # [N, 3]
+        next_gate_rel_w = next_gate_pos_w - pos_w                      # [N, 3]
 
         # --- Gate approach normal in world frame ---
         gate_normal_w = self.env._normal_vectors[self.env._idx_wp]      # [N, 3]
-
-        # --- Action history: shift buffer left, append latest action ---
-        self._action_history = torch.roll(self._action_history, -4, dims=1)
-        self._action_history[:, -4:] = self.env._previous_actions       # [N, steps*4]
 
         # --- Target gate phase: sin/cos encoding of current target gate index ---
         angle     = 2.0 * np.pi * self.env._idx_wp.float() / n_gates
@@ -163,10 +159,10 @@ class DefaultQuadcopterStrategy:
             lin_vel_b,          # (3)
             ang_vel_b,          # (3)
             quat_w,             # (4)
-            pos_wrt_gate,       # (3) drone position in current gate frame
-            next_gate_in_gate,  # (3) next gate center in current gate frame
+            prev_gate_rel_w,    # (3) vector from drone to prev gate (world)
+            gate_rel_w,         # (3) vector from drone to current gate (world)
+            next_gate_rel_w,    # (3) vector from drone to next gate (world)
             gate_normal_w,      # (3) gate approach direction in world frame
-            self._action_history,  # (num_prev_action_steps * 4)
             gate_sin,           # (1)
             gate_cos,           # (1)
         ], dim=-1)
