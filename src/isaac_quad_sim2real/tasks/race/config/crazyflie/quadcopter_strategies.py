@@ -263,6 +263,9 @@ class DefaultQuadcopterStrategy:
         # --- Per-env spawn offsets in gate-local frame ---
         # x_local is negative (behind the gate along its approach axis)
         x_local = torch.empty(n_reset, device=self.device).uniform_(-cfg.spawn_dist_max, -cfg.spawn_dist_min)
+        # Gate 3: spawn in front of the gate (positive x)
+        gate3_mask = (waypoint_indices == 3)
+        x_local[gate3_mask] = x_local[gate3_mask].abs()
         y_local = torch.empty(n_reset, device=self.device).uniform_(-cfg.spawn_lateral,   cfg.spawn_lateral)
         z_local = torch.empty(n_reset, device=self.device).uniform_(-cfg.spawn_vertical,  cfg.spawn_vertical)
 
