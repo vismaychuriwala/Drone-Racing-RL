@@ -264,8 +264,6 @@ class QuadcopterEnv(DirectRLEnv):
         # Initialize tensors
         self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self._previous_actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
-        self._previous_yaw = torch.zeros(self.num_envs, device=self.device)
-
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._wrench_des = torch.zeros(self.num_envs, 4, device=self.device)
@@ -274,10 +272,7 @@ class QuadcopterEnv(DirectRLEnv):
         self._previous_omega_meas = torch.zeros(self.num_envs, 3, device=self.device)
         self._previous_omega_err = torch.zeros(self.num_envs, 3, device=self.device)
 
-        self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
-
         self._last_distance_to_goal = torch.zeros(self.num_envs, device=self.device)
-        self._yaw_n_laps = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
         self._idx_wp = torch.zeros(self.num_envs, device=self.device, dtype=torch.int)
 
@@ -384,7 +379,7 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _debug_vis_callback(self, event):
         # update the markers
-        self.goal_pos_visualizer.visualize(self._desired_pos_w)
+        self.goal_pos_visualizer.visualize(self._waypoints[self._idx_wp, :3])
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -708,7 +703,6 @@ class QuadcopterEnv(DirectRLEnv):
             self._idx_wp[ids_crossed]             = (self._idx_wp[ids_crossed] + 1) % n_gates
             self._n_gates_passed[ids_crossed]     += 1
             self._gates_since_spawn[ids_crossed]  += 1
-            self._desired_pos_w[ids_crossed, :3]  = self._waypoints[self._idx_wp[ids_crossed], :3]
 
         self._prev_x_drone_wrt_gate = x_now.clone()
 

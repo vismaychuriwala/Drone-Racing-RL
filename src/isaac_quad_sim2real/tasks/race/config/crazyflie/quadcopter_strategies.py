@@ -228,7 +228,6 @@ class DefaultQuadcopterStrategy:
         self.env._actions[env_ids] = 0.0
         self.env._previous_actions[env_ids] = 0.0
         self._action_history[env_ids] = 0.0
-        self.env._previous_yaw[env_ids] = 0.0
         self.env._motor_speeds[env_ids] = 0.0
         self.env._previous_omega_meas[env_ids] = 0.0
         self.env._previous_omega_err[env_ids] = 0.0
@@ -329,15 +328,9 @@ class DefaultQuadcopterStrategy:
             default_root_state[:, 3:7] = quat
             waypoint_indices = self.env._initial_wp
 
-        # Set waypoint indices and desired positions
+        # Set waypoint indices
         self.env._idx_wp[env_ids] = waypoint_indices
 
-        self.env._desired_pos_w[env_ids, :2] = self.env._waypoints[waypoint_indices, :2].clone()
-        self.env._desired_pos_w[env_ids, 2] = self.env._waypoints[waypoint_indices, 2].clone()
-
-        self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
-            self.env._desired_pos_w[env_ids, :2] - self.env._robot.data.root_link_pos_w[env_ids, :2], dim=1
-        )
         # _n_gates_passed set to spawn gate index → sin/cos lap progress obs correct at spawn.
         # _gates_since_spawn always starts at 0 → used for lap completion detection.
         self.env._n_gates_passed[env_ids] = waypoint_indices
@@ -347,15 +340,17 @@ class DefaultQuadcopterStrategy:
         self.env._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
         self.env._robot.write_root_com_velocity_to_sim(default_root_state[:, 7:], env_ids)
 
-        # Reset variables
-        self.env._yaw_n_laps[env_ids] = 0
-
+        # Compute drone position in target gate frame — used for obs and reward init
         self.env._pose_drone_wrt_gate[env_ids], _ = subtract_frame_transforms(
             self.env._waypoints[self.env._idx_wp[env_ids], :3],
             self.env._waypoints_quat[self.env._idx_wp[env_ids], :],
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
 
-        self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
+        # Init prev_x and distance from the actual computed position, not hardcoded
+        self.env._prev_x_drone_wrt_gate[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0]
+        self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
+            self.env._pose_drone_wrt_gate[env_ids], dim=1
+        )
 
         self.env._crashed[env_ids] = 0
