@@ -78,10 +78,57 @@ class DefaultQuadcopterStrategy:
         self._crossed_gate2      = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._above_gate2        = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._loop_apex_rewarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Debug snapshot populated each step during play (is_train=False)
+        self._debug_rewards: dict = {}
 
     def get_rewards(self) -> torch.Tensor:
 
         if not self.cfg.is_train:
+            # --- Play mode: run tracking & store env-0 indicators for CSV/plot debug ---
+            crossed        = self.env._gate_crossed_this_step
+            lap_completed  = self.env._lap_completed_this_step
+            wrong_crossing = self.env._wrong_crossing_this_step
+            curr_d  = torch.norm(self.env._pose_drone_wrt_gate, dim=-1)
+            drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+
+            # Power-loop flags (same logic as training path)
+            gate2_just_crossed = crossed & (self.env._idx_wp == 3)
+            self._crossed_gate2 = self._crossed_gate2 | gate2_just_crossed
+            prev_above_gate2 = self._above_gate2.clone()
+            gate2_z = self.env._waypoints[2, 2]
+            loop_height_threshold = 1.0
+            self._above_gate2 = self._above_gate2 | (
+                (self.env._idx_wp == 3)
+                & self._crossed_gate2
+                & (drone_z > gate2_z + loop_height_threshold)
+            )
+            loop_apex_just_reached = (
+                self._above_gate2 & ~prev_above_gate2 & ~self._loop_apex_rewarded
+            )
+            self._loop_apex_rewarded = self._loop_apex_rewarded | loop_apex_just_reached
+            loop_incomplete = (
+                (self.env._idx_wp == 3) & self._crossed_gate2 & ~self._above_gate2
+            )
+
+            contact_forces = self.env._contact_sensor.data.net_forces_w
+            crashed_vals = (torch.norm(contact_forces, dim=-1) > 1e-8).reshape(self.num_envs)
+
+            self._debug_rewards = {
+                "gate_crossed":           int(crossed[0].item()),
+                "wrong_crossing":         int(wrong_crossing[0].item()),
+                "lap_completed":          int(lap_completed[0].item()),
+                "loop_apex_just_reached": int(loop_apex_just_reached[0].item()),
+                "loop_incomplete":        int(loop_incomplete[0].item()),
+                "progress_raw":           round(
+                    float(self.env._last_distance_to_goal[0].item() - curr_d[0].item()), 5
+                ),
+                "crashed":                int(crashed_vals[0].item()),
+                "gate_idx":               int(self.env._idx_wp[0].item()),
+                "drone_z":                round(float(drone_z[0].item()), 4),
+                "crossed_gate2_flag":     int(self._crossed_gate2[0].item()),
+                "above_gate2_flag":       int(self._above_gate2[0].item()),
+            }
+            self.env._last_distance_to_goal = curr_d.clone()
             return torch.zeros(self.num_envs, device=self.device)
 
 
@@ -219,7 +266,7 @@ class DefaultQuadcopterStrategy:
         gate3_just_crossed = crossed & (self.env._idx_wp == 4)
         gate3_shortcut     = gate3_just_crossed & self._crossed_gate2 & ~self._above_gate2
         # Remove the gate_cross component for shortcut crossings.
-        base_rew = torch.where(gate3_shortcut, base_rew - crossed.float() * scale, base_rew)
+        base_rew = torch.where(gate3_shortcut, base_rew - crossed.float() * 2.0*scale, base_rew)
 
         # Reset all power-loop flags once gate 3 is crossed (valid or shortcut).
         self._crossed_gate2[gate3_just_crossed]      = False
