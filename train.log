@@ -1,0 +1,83 @@
+[Warning] [simulation_app.simulation_app] Modules: ['omni.kit_app'] were loaded before SimulationApp was started and might not be loaded correctly.
+[Warning] [simulation_app.simulation_app] Please check to make sure no extra omniverse or pxr modules are imported before the call to SimulationApp(...)
+Loading user config located at: '/home/vismay/miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/omni/data/Kit/Isaac-Sim/4.5/user.config.json'
+[Info] [carb] Logging to file: /home/vismay/miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/omni/logs/Kit/Isaac-Sim/4.5/kit_20260402_165942.log
+2026-04-02 16:59:42 [0ms] [Warning] [omni.kit.app.plugin] No crash reporter present, dumps uploading isn't available.
+2026-04-02 16:59:42 [8ms] [Warning] [omni.ext.plugin] [ext: rendering_modes] Extensions config 'extension.toml' doesn't exist '/home/vismay/IsaacLab/apps/isaacsim_4_5/rendering_modes' or '/home/vismay/IsaacLab/apps/isaacsim_4_5/rendering_modes/config'
+2026-04-02 16:59:42 [271ms] [Warning] [omni.datastore] OmniHub is inaccessible
+2026-04-02 16:59:42 [294ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:42 [294ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:42 [317ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 590.48.01     | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA L4                        | Yes: 0 |     | 23034   MB | 10de      | 0          |
+|     |                                  |        |     |            | 27b8      | 6f7c4795.. |
+|     |                                  |        |     |            | 0         |            |
+|=============================================================================================|
+| OS: 22.04.5 LTS (Jammy Jellyfish) ubuntu, Version: 22.04.5, Kernel: 6.8.0-1053-gcp
+| Processor: Intel(R) Xeon(R) CPU @ 2.20GHz
+| Cores: 4 | Logical Cores: 8
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 32093 | Free Memory: 30631
+| Total Page/Swap (MB): 0 | Free Page/Swap: 0
+|---------------------------------------------------------------------------------------------|
+2026-04-02 16:59:43 [1,122ms] [Warning] [gpu.foundation.plugin] ECC is enabled on physical device 0
+2026-04-02 16:59:43 [1,905ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:43 [1,906ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:43 [1,924ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:43 [1,924ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:43 [1,935ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:43 [1,935ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:44 [1,962ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization fai[INFO] Using local rsl_rl from: /home/vismay/Drone-Racing-RL/src/third_parties/rsl_rl_local
+[INFO] Applied wandb compatibility patch for Isaac Sim environment
+[INFO][AppLauncher]: Using device: cuda:0
+[INFO][AppLauncher]: Loading experience file: /home/vismay/IsaacLab/apps/isaacsim_4_5/isaaclab.python.headless.rendering.kit
+led.
+2026-04-02 16:59:44 [1,962ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:44 [1,964ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:44 [1,964ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:44 [1,966ms] [Warning] [carb.windowing-glfw.plugin] GLFW initialization failed.
+2026-04-02 16:59:44 [1,966ms] [Warning] [carb] Failed to startup plugin carb.windowing-glfw.plugin (interfaces: [carb::windowing::IGLContext v1.0],[carb::windowing::IWindowing v1.5]) (impl: carb.windowing-glfw.plugin)
+2026-04-02 16:59:44 [2,392ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-04-02 16:59:45 [3,149ms] [Warning] [omni.log] Source: omni.hydra was already registered.
+2026-04-02 16:59:45 [3,941ms] [Warning] [omni.replicator.core.scripts.extension] No material configuration file, adding configuration to material settings directly.
+2026-04-02 16:59:49 [7,823ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/ambientOcclusion/enabled'
+2026-04-02 16:59:49 [7,823ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/directLighting/sampledLighting/enabled'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/indirectDiffuse/enabled'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/raytracing/cached/enabled'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/reflections/enabled'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/sceneDb/ambientLightIntensity'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/translucency/enabled'
+2026-04-02 16:59:49 [7,824ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/viewTile/limit'
+2026-04-02 16:59:50 [8,003ms] [Warning] [rtx.neuraylib.plugin] [IRAY:RENDER]   1.1   IRAY   rend warn : CUDA device 0 (NVIDIA L4): ECC is enabled, this will reduce rendering performance (it is strongly recommended to disable ECC with iray)
+2026-04-02 16:59:50 [8,010ms] [Warning] [rtx.scenedb.plugin] SceneDbContext : TLAS limit buffer size 2908577024
+2026-04-02 16:59:50 [8,010ms] [Warning] [rtx.scenedb.plugin] SceneDbContext : TLAS limit : valid true, within: false
+2026-04-02 16:59:50 [8,160ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/directLighting/sampledLighting/samplesPerPixel'
+2026-04-02 16:59:50 [8,160ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/pathtracing/maxSamplesPerLaunch'
+2026-04-02 16:59:50 [8,161ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults-transient/meshlights/forceDisable'
+2026-04-02 16:59:50 [8,242ms] [Warning] [omni.usd-abi.plugin] No setting was found for '/rtx-defaults/post/dlss/execMode'
+Traceback (most recent call last):
+  File "/home/vismay/Drone-Racing-RL/scripts/rsl_rl/train_race.py", line 75, in <module>
+    import src.isaac_quad_sim2real.tasks   # noqa: F401
+ModuleNotFoundError: No module named 'src'
+2026-04-02 16:59:55 [13,687ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Annotators' for removal
+2026-04-02 16:59:55 [13,688ms] [Warning] [omni.graph.core.plugin] Could not find category 'Replicator:Core' for removal
+2026-04-02 16:59:55 [13,705ms] [Warning] [omni.fabric.plugin] gFabricState->gUsdStageToSimStageWithHistoryMap had 1 outstanding SimStageWithHistory(s) at shutdown
+2026-04-02 16:59:55 [13,808ms] [Warning] [carb] Recursive unloadAllPlugins() detected!
