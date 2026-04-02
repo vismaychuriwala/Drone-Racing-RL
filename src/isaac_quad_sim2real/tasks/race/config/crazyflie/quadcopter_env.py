@@ -803,14 +803,14 @@ class QuadcopterEnv(DirectRLEnv):
         cond_crashed = self._crashed > 100
 
         #TODO ----- START ----- [OPTIONAL]
-        # Consider adding additional _get_dones() conditions to influence training. Note that the additional conditions
-        # will not be used during runtime for the official class race.
+        cond_wrong_crossing = self._wrong_crossing_this_step
         #TODO ----- END ----- [OPTIONAL]
 
         died = (
             cond_max_h
           | cond_h_min_time
           | cond_crashed
+          | cond_wrong_crossing
         )
 
         # timeout conditions

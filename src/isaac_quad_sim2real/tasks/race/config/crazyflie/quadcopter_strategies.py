@@ -85,7 +85,6 @@ class DefaultQuadcopterStrategy:
         # correct for the current gate when we get here.
         crossed        = self.env._gate_crossed_this_step
         lap_completed  = self.env._lap_completed_this_step
-        wrong_crossing = self.env._wrong_crossing_this_step
 
         # Progress reward: delta distance to current gate center.
         # Positive when closing distance, negative when retreating.
@@ -120,8 +119,7 @@ class DefaultQuadcopterStrategy:
                 "lap_complete":    lap_completed.float()   * self.env.rew['lap_complete_reward_scale'],
                 # Sparse: extra lap reward — higher for faster laps
                 "lap_time":        lap_completed.float()   * lap_time_bonus,
-                # Sparse: penalty for wrong gate or wrong direction crossing
-                "wrong_crossing":  wrong_crossing.float()  * self.env.rew['wrong_crossing_reward_scale'],
+                # Wrong crossing is now a terminal condition (death_cost applies).
                 # Dense negative: penalise contact each step (after grace period)
                 "crash":           crashed.float()         * self.env.rew['crash_reward_scale'],
                 # Dense: delta distance to gate

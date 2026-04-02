@@ -121,8 +121,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'lap_time_bonus':               1.0,
         'lap_target_time':              7.0,    # seconds — target lap time
         'lap_time_constant':            3.0,    # seconds — controls decay steepness
-        # Sparse: penalty for wrong gate or wrong direction crossing
-        'wrong_crossing_reward_scale':  -1.0,
         # Small per-step contact penalty
         'crash_reward_scale':           -0.005,
         # Terminal: applied on episode death (crash/altitude violation)
