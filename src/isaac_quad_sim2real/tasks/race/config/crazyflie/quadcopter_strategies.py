@@ -54,12 +54,6 @@ class DefaultQuadcopterStrategy:
         self.env._tau_m[:] = self.env._tau_m_value
         self.env._thrust_to_weight[:] = self.env._twr_value
 
-        # Rolling action history buffer: [num_envs, num_prev_action_steps * 4]
-        # Oldest actions at index 0, most recent at index -4:
-        n = self.cfg.num_prev_action_steps
-        self._action_history = torch.zeros(
-            self.num_envs, n * 4, dtype=torch.float, device=self.device
-        )
 
     def get_rewards(self) -> torch.Tensor:
 
@@ -211,7 +205,6 @@ class DefaultQuadcopterStrategy:
         # Reset action buffers
         self.env._actions[env_ids] = 0.0
         self.env._previous_actions[env_ids] = 0.0
-        self._action_history[env_ids] = 0.0
         self.env._motor_speeds[env_ids] = 0.0
         self.env._previous_omega_meas[env_ids] = 0.0
         self.env._previous_omega_err[env_ids] = 0.0
