@@ -123,8 +123,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'lap_time_constant':            3.0,    # seconds — controls decay steepness
         # Small per-step contact penalty
         'crash_reward_scale':           -0.005,
-        # Terminal: applied on episode death (crash/altitude violation)
+        # Terminal: applied on episode death (crash/altitude violation/wrong crossing)
         'death_cost':                   -1.0,
+        # Terminal: applied on episode timeout (encourages urgency over idling)
+        'timeout_cost':                 -0.5,
         # Dense: delta distance to gate
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
         'progress_reward_scale':        0.02,

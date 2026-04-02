@@ -128,6 +128,8 @@ class DefaultQuadcopterStrategy:
             reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
             reward = torch.where(self.env.reset_terminated,
                                  torch.ones_like(reward) * self.env.rew['death_cost'], reward)
+            reward = torch.where(self.env.reset_time_outs,
+                                 torch.ones_like(reward) * self.env.rew['timeout_cost'], reward)
 
             for key, value in rewards.items():
                 self._episode_sums[key] += value

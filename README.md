@@ -116,47 +116,45 @@ Configured in `train_race.py`:
 
 ```python
 rewards = {
-    'gate_cross_reward_scale':     5.0,   # sparse: per correct gate traversal
-    'lap_complete_reward_scale':  25.0,   # sparse: flat reward per full lap
-    'lap_time_bonus':              3.0,   # sparse: extra lap reward for fast laps
-    'lap_target_time':             7.0,   # seconds — target lap time
-    'lap_time_constant':           3.0,   # seconds — decay steepness
-    'wrong_crossing_reward_scale': -1.0,  # sparse: wrong gate or wrong direction penalty
-    'crash_reward_scale':       -0.005,   # dense: per-step contact, after 100-step grace
-    'death_cost':                 -1.0,   # terminal: on episode death
-    'progress_reward_scale':       0.1,   # dense: delta distance to gate center
-    'progress_retreat_multiplier': 1.5,   # retreat penalized 1.5× vs approach reward
+    'gate_cross_reward_scale':     5.0,    # sparse: per correct gate traversal
+    'lap_complete_reward_scale':  25.0,    # sparse: flat reward per full lap
+    'lap_time_bonus':              1.0,    # sparse: extra lap reward for fast laps
+    'lap_target_time':             7.0,    # seconds — target lap time
+    'lap_time_constant':           3.0,    # seconds — decay steepness
+    'crash_reward_scale':       -0.005,    # dense: per-step contact, after 100-step grace
+    'death_cost':                 -1.0,    # terminal: on episode death (crash/altitude/wrong crossing)
+    'timeout_cost':               -0.5,    # terminal: on episode timeout (discourages idling)
+    'progress_reward_scale':      0.02,    # dense: delta distance to gate center
+    'progress_retreat_multiplier': 1.005,  # retreat penalized slightly harder than approach
 }
 ```
 
-**Balance:** crash-farm 7 gates + die = 35-1 = +34. Clean lap = 35+25+3 = 63. ~1.9× better → prefers
-completion. Death cost is mild — policy won't be afraid to fly aggressively. Gate crossing does
-the heavy lifting.
+**Terminal conditions:**
+- **Death (-1.0):** crash (sustained contact > 100 steps), altitude violation, or wrong gate crossing.
+  Wrong crossing is now purely terminal — no separate reward param. Episode ends immediately.
+- **Timeout (-0.5):** milder than death so the policy still prefers surviving, but idling out the
+  clock is penalized. Without this, the policy learns to hover and avoid risk.
 
 **Crash fires on gate-frame contact too** — kept very small (-0.005) to avoid penalizing gate brushes.
 
 **Progress reward:**
 ```python
-progress = last_dist - curr_dist                         # +ve = closing distance
-progress = where(progress >= 0, progress, progress * 1.5)  # retreat penalized 1.5×
+progress = last_dist - curr_dist                            # +ve = closing distance
+progress = where(progress >= 0, progress, progress * 1.005) # retreat penalized slightly more
 ```
-Delta distance to gate center, ~0.06m/step at 3m/s. Over a 5m segment: ~0.5 cumulative vs 5.0
-for crossing → crossing is 10× more valuable. Progress just nudges toward the gate.
-Oscillation is net negative (approach reward < retreat penalty for same displacement).
-
-Replaced velocity reward (which used fixed gate normal — broken when drone is past the gate,
-and equivalent to progress when fixed to use drone-to-gate direction).
+Euclidean distance delta to gate center. Scale=0.02, retreat multiplier nearly symmetric at 1.005.
+Progress just nudges toward the gate — gate crossing reward does the heavy lifting.
 
 **Lap time bonus:** `bonus * exp((target_time - lap_elapsed) / constant)`:
-- Lap in 4s: `3 * exp(1.0)` = 8.2 bonus (on top of flat 25)
-- Lap in 7s (target): `3 * exp(0)` = 3.0 bonus
-- Lap in 10s: `3 * exp(-1)` = 1.1 bonus
+- Lap in 4s: `1 * exp(1.0)` = 2.7 bonus (on top of flat 25)
+- Lap in 7s (target): `1 * exp(0)` = 1.0 bonus
+- Lap in 10s: `1 * exp(-1)` = 0.37 bonus
 - Uses per-lap elapsed time (not episode time) — 2nd/3rd laps get fair timing.
 - 30s episode fits ~3 laps at target pace. Constant=3s gives moderate decay.
 
-**Wrong crossing penalty (-1.0):** only fires when no correct crossing happened on the same step.
-This prevents spurious penalties on co-located opposite-direction gates (powerloop gates 3/6).
-Only correct gate + correct direction advances `_idx_wp`.
+**Wrong crossing** is detected but not penalized via reward — instead triggers episode termination
+(death cost applies). `good_cross` suppresses `wrong_cross` on the same step to prevent spurious
+penalties on co-located opposite-direction gates (powerloop gates 3/6).
 
 ---
 
@@ -221,7 +219,7 @@ Enable phase 2. Simulates carry-over speed from previous gate exit.
 
 ## Domain Randomization
 
-**Currently disabled** (`env_cfg.domain_randomization = False` in `train_race.py`). Per-episode
+**Enabled** (`env_cfg.domain_randomization = True` in `train_race.py`). Per-episode
 sampling in `reset_idx` from the eval ranges specified in the project handout:
 
 ```
@@ -294,8 +292,9 @@ Real fix was the `.squeeze(-1)` bug, not batch size.
 | Single cos with [0,π] range | Rejected | cos(0)=cos(2π) regardless of range. Periodicity survives rescaling. |
 | Heading/yaw error as gate obs | Rejected | Heading loses y/z centering. Normalized direction loses distance. Full 3D pos_wrt_gate strictly better. |
 | Crash reward as primary deterrent | Kept tiny (-0.005) | Fires on gate-frame contact. Death cost is real deterrent. |
+| Separate wrong crossing reward | Replaced by terminal death | Double-penalizing (reward + death) was redundant. Now wrong crossing = episode death, death_cost applies. Cleaner signal. |
 | Velocity reward (dot with gate normal) | Replaced by progress | Fixed gate normal is wrong when drone is past gate. Using drone-to-gate direction collapses to delta-distance (progress). Progress is simpler, cheaper, correct everywhere. |
 | LSTM/Transformer for longer rollouts | Deferred | Recurrence doesn't enable longer rollouts — BPTT still truncated at rollout boundary. Memory bottleneck same. Overkill given good obs design. |
 | KL-penalty PPO instead of clipped | Rejected | Needs extra β tuning. Adaptive KL LR schedule already gives most of benefit. |
-| Time-decaying lap bonus as primary speed signal | Active (small scale) | Scale=3.0, target=7s, constant=3s. Uses per-lap timer, not episode time. Increase scale in phase 2 once laps reliable. |
+| Time-decaying lap bonus as primary speed signal | Active (small scale) | Scale=1.0, target=7s, constant=3s. Uses per-lap timer, not episode time. Increase scale in phase 2 once laps reliable. |
 | Initial velocity at spawn in phase 1 | Deferred to phase 2 | Policy crashes immediately if it never learned to handle entry velocity. Add after base policy works. |
