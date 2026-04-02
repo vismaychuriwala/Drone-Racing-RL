@@ -82,7 +82,7 @@ class DefaultQuadcopterStrategy:
         # which runs at the top of _get_dones — before this call and before
         # _get_observations, so _idx_wp and _pose_drone_wrt_gate are already
         # correct for the current gate when we get here.
-        crossed       = self.env._gate_crossed_this_step
+        crossed       = self.env._target_gate_crossed
         lap_completed = self.env._lap_completed_this_step
 
         # Progress reward: delta distance to current gate center.
@@ -347,8 +347,16 @@ class DefaultQuadcopterStrategy:
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
 
-        # Init prev_x and distance from the actual computed position, not hardcoded
-        self.env._prev_x_drone_wrt_gate[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0]
+        # Init prev_x for all gates from actual drone position
+        spawn_pos = self.env._robot.data.root_link_state_w[env_ids, :3]
+        n_gates = self.env._waypoints.shape[0]
+        for g in range(n_gates):
+            pos_wrt_g, _ = subtract_frame_transforms(
+                self.env._waypoints[g, :3].unsqueeze(0).expand(len(env_ids), -1),
+                self.env._waypoints_quat[g, :].unsqueeze(0).expand(len(env_ids), -1),
+                spawn_pos
+            )
+            self.env._prev_x_drone_wrt_all_gates[env_ids, g] = pos_wrt_g[:, 0]
         self.env._last_distance_to_goal[env_ids] = torch.linalg.norm(
             self.env._pose_drone_wrt_gate[env_ids], dim=1
         )
