@@ -97,6 +97,8 @@ class DefaultQuadcopterStrategy:
             prev_above_gate2 = self._above_gate2.clone()
             gate2_z = self.env._waypoints[2, 2]
             loop_height_threshold = 1.0
+            # Height-only condition — lateral fired too easily since gate 2 exit is
+            # already ~1.25m lateral from gate 3, barely below any reasonable threshold.
             self._above_gate2 = self._above_gate2 | (
                 (self.env._idx_wp == 3)
                 & self._crossed_gate2
@@ -110,6 +112,14 @@ class DefaultQuadcopterStrategy:
                 (self.env._idx_wp == 3) & self._crossed_gate2 & ~self._above_gate2
             )
 
+            # Reset power-loop flags once gate 3 is crossed (keeps behaviour
+            # purely between gate 2 and gate 3; default progress resumes after).
+            n_gates = self.env._waypoints.shape[0]
+            gate3_just_crossed = crossed & (self.env._idx_wp == (4 % n_gates))
+            self._crossed_gate2[gate3_just_crossed]      = False
+            self._above_gate2[gate3_just_crossed]        = False
+            self._loop_apex_rewarded[gate3_just_crossed] = False
+
             contact_forces = self.env._contact_sensor.data.net_forces_w
             crashed_vals = (torch.norm(contact_forces, dim=-1) > 1e-8).reshape(self.num_envs)
 
@@ -119,6 +129,7 @@ class DefaultQuadcopterStrategy:
                 "lap_completed":          int(lap_completed[0].item()),
                 "loop_apex_just_reached": int(loop_apex_just_reached[0].item()),
                 "loop_incomplete":        int(loop_incomplete[0].item()),
+                "gate3_just_crossed":     int(gate3_just_crossed[0].item()),
                 "progress_raw":           round(
                     float(self.env._last_distance_to_goal[0].item() - curr_d[0].item()), 5
                 ),
@@ -167,7 +178,9 @@ class DefaultQuadcopterStrategy:
         prev_above_gate2 = self._above_gate2.clone()
         gate2_z = self.env._waypoints[2, 2]                        # gate 2 world z
         drone_z = self.env._robot.data.root_link_pos_w[:, 2]
-        loop_height_threshold = 1.0                                # metres above gate centre
+        loop_height_threshold = 1.0                                # metres above gate 2 centre
+        # No lateral condition — that fired too easily (drone starts ~1.25m lateral
+        # from gate 3 right after crossing gate 2). Height only forces a real vertical arc.
         self._above_gate2 = self._above_gate2 | (
             (self.env._idx_wp == 3)
             & self._crossed_gate2
@@ -177,23 +190,45 @@ class DefaultQuadcopterStrategy:
         loop_apex_just_reached = self._above_gate2 & ~prev_above_gate2 & ~self._loop_apex_rewarded
         self._loop_apex_rewarded = self._loop_apex_rewarded | loop_apex_just_reached
 
-        # Suppress progress toward gate 3 while the arc is incomplete.
-        # gate3_wrong_side (x<=0) was incorrect — during a shortcut the drone
-        # approaches gate 3 from x>0, so that condition never fires.
+        # Suppress progress toward gate 3 while the arc is incomplete (play-mode debug only).
         loop_incomplete = (
             (self.env._idx_wp == 3)
             & self._crossed_gate2
             & ~self._above_gate2
         )
 
-        # progress = +ve when moving closer (last - current > 0)
-        progress = last_d - curr_d
+        # Tanh-normalised progress: tanh(Δd / scale) ∈ (-1, +1).
+        # scale = typical forward distance per step (e.g. 0.05m @ 3m/s, 60Hz).
+        # Symmetrically penalise retreat by retreat_mult before normalising so
+        # the asymmetry is preserved while still being bounded.
+        progress_norm_scale = self.env.rew.get('progress_norm_scale', 0.05)
+        delta_d = last_d - curr_d   # +ve when getting closer
         retreat_mult = self.env.rew['progress_retreat_multiplier']
-        progress = torch.where(progress >= 0, progress, progress * retreat_mult)
+        delta_d = torch.where(delta_d >= 0, delta_d, delta_d * retreat_mult)
+        base_progress = torch.tanh(delta_d / progress_norm_scale)
+        progress = base_progress
 
-        # No progress reward toward gate 3 until the loop arc is completed.
-        # This removes the dense signal that pulled drones straight to gate 3.
-        progress = torch.where(loop_incomplete, torch.zeros_like(progress), progress)
+        # Between gate 2 and 3: replace progress with a blend of height climbing
+        # and gate-3 approach.  Two regimes:
+        #   - Before apex: 80% height, 20% gate-3 → primarily incentivise climbing
+        #   - After apex:  25% height, 75% gate-3 → dense pull toward gate 3
+        # Outside the powerloop segment (any other gate pair) progress is unchanged.
+        in_powerloop_segment = (self.env._idx_wp == 3) & self._crossed_gate2
+
+        # Height term: Gaussian centered on target apex height.
+        # Peaks at 1.0 when drone is right at the apex, drops off above or below.
+        target_loop_height   = gate2_z + loop_height_threshold
+        height_error         = torch.abs(drone_z - target_loop_height)
+        loop_height_progress = torch.exp(-height_error / 0.3)
+
+        # Gate-3 approach: reuse base_progress which already includes retreat multiplier.
+        dense_loop_progress = torch.where(
+            self._above_gate2,
+            0.25 * loop_height_progress + 0.75 * base_progress,
+            0.8  * loop_height_progress + 0.2  * base_progress,
+        )
+
+        progress = torch.where(in_powerloop_segment, dense_loop_progress, progress)
 
         # Keep real curr distance in _last_distance_to_goal so future checks use true pose
         self.env._last_distance_to_goal = curr_d.clone()
@@ -251,7 +286,7 @@ class DefaultQuadcopterStrategy:
 
         Stage 1 — gate 2 forward crossing:  +scale        (all envs, no condition)
         Stage 2 — loop apex first reached:  +scale * 0.5  (one-shot, incentivises climbing)
-        Stage 3 — gate 3 forward crossing:  +scale        (only if stage 2 done, else 0)
+        Stage 3 — gate 3 forward crossing:  +scale if apex done, else 0 (no reward, no penalty)
 
         Total for full loop: +11.5  vs shortcut: +5.0  (with scale=5.0)
         """
@@ -263,10 +298,10 @@ class DefaultQuadcopterStrategy:
 
         # Stage 3: gate 3 earns reward only if the arc was completed.
         # After gate 3 is crossed, _idx_wp was advanced to 4.
+        # Shortcut → zero the gate_cross component (not negative).
         gate3_just_crossed = crossed & (self.env._idx_wp == 4)
         gate3_shortcut     = gate3_just_crossed & self._crossed_gate2 & ~self._above_gate2
-        # Remove the gate_cross component for shortcut crossings.
-        base_rew = torch.where(gate3_shortcut, base_rew - crossed.float() * 2.0*scale, base_rew)
+        base_rew = torch.where(gate3_shortcut, base_rew - crossed.float() * scale, base_rew)
 
         # Reset all power-loop flags once gate 3 is crossed (valid or shortcut).
         self._crossed_gate2[gate3_just_crossed]      = False

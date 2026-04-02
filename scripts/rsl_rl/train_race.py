@@ -127,10 +127,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'crash_reward_scale':           -0.005,
         # Terminal: applied on episode death (crash/altitude violation)
         'death_cost':                   -1.0,
-        # Dense: delta distance to gate
+        # Dense: tanh-normalised delta distance to gate.
+        # progress = tanh(Δd / progress_norm_scale) ∈ (-1, +1).
+        # progress_norm_scale is the typical per-step forward distance (m);
+        # 0.05 = 5 cm ≈ drone at 3 m/s @ 60 Hz. Tune down for slower flights.
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
         'progress_reward_scale':        0.05,
-        
+        'progress_norm_scale':          0.05,   # metres — tanh saturation point
         'progress_retreat_multiplier':  1.0,
     }
     # TODO ----- END -----
