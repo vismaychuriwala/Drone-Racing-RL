@@ -93,7 +93,7 @@ class DefaultQuadcopterStrategy:
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
         # Cap forward x to avoid unbounded progress after passing the gate.
         # `progress_cap` is tuneable; start with 2.0 m.
-        progress_cap = 2.0
+        progress_cap = 1.0
         curr_x = self.env._pose_drone_wrt_gate[:, 0]
 
         # Fix: when an env crossed a gate this step, _idx_wp was advanced
