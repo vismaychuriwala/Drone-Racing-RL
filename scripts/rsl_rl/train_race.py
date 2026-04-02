@@ -119,8 +119,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # Sparse: extra lap bonus — exp((target - elapsed) / constant)
         #   faster than target → bonus > lap_time_bonus, slower → decays toward 0
         'lap_time_bonus':               0.0,
-        'lap_target_time':              7.0,    # seconds — target lap time
-        'lap_time_constant':            3.0,    # seconds — controls decay steepness
+        'lap_target_time':              0.0,    # seconds — target lap time
+        'lap_time_constant':            0.0,    # seconds — controls decay steepness
         # Sparse: penalty for wrong gate or wrong direction crossing
         'wrong_crossing_reward_scale':  -1.0,
         # Small per-step contact penalty
@@ -129,7 +129,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'death_cost':                   -1.0,
         # Dense: delta distance to gate
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
-        'progress_reward_scale':        0.005,
+        'progress_reward_scale':        0.05,
         
         'progress_retreat_multiplier':  1.0,
     }

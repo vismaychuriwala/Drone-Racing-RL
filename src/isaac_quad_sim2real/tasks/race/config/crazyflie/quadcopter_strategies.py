@@ -87,35 +87,30 @@ class DefaultQuadcopterStrategy:
         lap_completed  = self.env._lap_completed_this_step
         wrong_crossing = self.env._wrong_crossing_this_step
 
-        # Progress reward: change in forward-axis (gate-frame x) to current gate center.
-        # Use gate-frame x (index 0) so forward motion toward the gate yields positive
-        # progress even when vertical/sideways motion increases Euclidean distance.
+        # Progress reward: change in Euclidean distance (norm) to current gate center.
+        # Positive when the drone gets closer to the gate (distance decreases).
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
-        # Cap forward x to avoid unbounded progress after passing the gate.
-        # `progress_cap` is tuneable; start with 2.0 m.
-        progress_cap = 1.0
-        curr_x = self.env._pose_drone_wrt_gate[:, 0]
+        # current Euclidean distance to gate center (gate-frame coordinates)
+        curr_d = torch.norm(self.env._pose_drone_wrt_gate, dim=-1)
 
         # Fix: when an env crossed a gate this step, _idx_wp was advanced
         # before get_rewards() runs, so _pose_drone_wrt_gate is relative to
         # the NEW gate while _last_distance_to_goal still holds the value
-        # measured to the OLD gate. Replace last_x for crossed envs with
-        # the current x to avoid a spurious large negative progress spike.
-        last_x = self.env._last_distance_to_goal.clone()
+        # measured to the OLD gate. Replace last_d for crossed envs with
+        # the current distance to avoid a spurious large progress spike.
+        last_d = self.env._last_distance_to_goal.clone()
         try:
             crossed_mask = crossed.bool()
         except Exception:
             crossed_mask = (crossed > 0)
-        last_x[crossed_mask] = curr_x[crossed_mask]
+        last_d[crossed_mask] = curr_d[crossed_mask]
 
-        curr_x_c = torch.clamp(curr_x, max=progress_cap)
-        last_x_c = torch.clamp(last_x, max=progress_cap)
-        # progress = +ve when moving forward (increasing x toward/through gate)
-        progress = curr_x_c - last_x_c
+        # progress = +ve when moving closer (last - current > 0)
+        progress = last_d - curr_d
         retreat_mult = self.env.rew['progress_retreat_multiplier']
         progress = torch.where(progress >= 0, progress, progress * retreat_mult)
-        # Keep real curr_x in _last_distance_to_goal so future checks use true pose
-        self.env._last_distance_to_goal = curr_x.clone()
+        # Keep real curr distance in _last_distance_to_goal so future checks use true pose
+        self.env._last_distance_to_goal = curr_d.clone()
 
         # Lap time bonus: exp((target - lap_elapsed) / constant)
         #   faster than target → exp(+) > 1 → extra reward
@@ -392,9 +387,11 @@ class DefaultQuadcopterStrategy:
             self.env._robot.data.root_link_state_w[env_ids, :3]
         )
 
-        # Init _last_distance_to_goal from gate-frame forward-axis x so the
-        # progress term reflects forward motion along the gate approach axis.
-        self.env._last_distance_to_goal[env_ids] = self.env._pose_drone_wrt_gate[env_ids, 0].clone()
+        # Init _last_distance_to_goal from Euclidean distance to current gate
+        # so the progress term reflects change in norm (getting closer/farther).
+        self.env._last_distance_to_goal[env_ids] = torch.norm(
+            self.env._pose_drone_wrt_gate[env_ids], dim=-1
+        ).clone()
 
         self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
         # Initialize _prev_x_all_gates to actual x-positions relative to all gates
