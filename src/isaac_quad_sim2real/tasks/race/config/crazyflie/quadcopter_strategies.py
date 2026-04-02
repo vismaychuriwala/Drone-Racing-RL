@@ -11,7 +11,7 @@ import torch
 import numpy as np
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
-from isaaclab.utils.math import subtract_frame_transforms, quat_from_euler_xyz, euler_xyz_from_quat, wrap_to_pi, matrix_from_quat
+from isaaclab.utils.math import subtract_frame_transforms, quat_from_euler_xyz, euler_xyz_from_quat, wrap_to_pi
 
 if TYPE_CHECKING:
     from .quadcopter_env import QuadcopterEnv
@@ -122,15 +122,12 @@ class DefaultQuadcopterStrategy:
             quat_w            (4)  — orientation quaternion in world frame
             pos_wrt_gate      (3)  — drone position in current gate frame
             next_gate_in_gate (3)  — next gate position in current gate frame (lookahead)
-            gate_normal_b     (3)  — current gate approach normal in body frame
+            gate_normal_w     (3)  — current gate approach normal in world frame
             prev_actions      (num_prev_action_steps * 4)  — action history, oldest first
             target_gate_phase (2)  — (sin, cos) of target gate index, periodic across boundary
         """
         n_gates   = self.env._waypoints.shape[0]
         quat_w    = self.env._robot.data.root_quat_w          # [N, 4]
-
-        # Rotation matrices
-        rot_w2b = matrix_from_quat(quat_w).transpose(-1, -2)  # world → body [N,3,3]
 
         # --- Core drone state ---
         pos_w     = self.env._robot.data.root_link_pos_w       # [N, 3]
@@ -149,11 +146,8 @@ class DefaultQuadcopterStrategy:
             curr_gate_pos_w, curr_gate_quat_w, next_gate_pos_w
         )                                                                # [N, 3]
 
-        # --- Gate approach normal rotated into body frame ---
+        # --- Gate approach normal in world frame ---
         gate_normal_w = self.env._normal_vectors[self.env._idx_wp]      # [N, 3]
-        gate_normal_b = torch.bmm(
-            rot_w2b, gate_normal_w.unsqueeze(-1)
-        ).squeeze(-1)                                                    # [N, 3]
 
         # --- Action history: shift buffer left, append latest action ---
         self._action_history = torch.roll(self._action_history, -4, dims=1)
@@ -171,7 +165,7 @@ class DefaultQuadcopterStrategy:
             quat_w,             # (4)
             pos_wrt_gate,       # (3) drone position in current gate frame
             next_gate_in_gate,  # (3) next gate center in current gate frame
-            gate_normal_b,      # (3) gate approach direction in body frame
+            gate_normal_w,      # (3) gate approach direction in world frame
             self._action_history,  # (num_prev_action_steps * 4)
             gate_sin,           # (1)
             gate_cos,           # (1)
