@@ -127,7 +127,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         'death_cost':                   -1.0,
         # Dense: delta distance to gate
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
-        'progress_reward_scale':        0.1,
+        'progress_reward_scale':        0.02,
         'progress_retreat_multiplier':  1.005,
     }
     # TODO ----- END -----
