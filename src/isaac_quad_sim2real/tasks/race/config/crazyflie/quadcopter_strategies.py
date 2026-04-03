@@ -97,12 +97,18 @@ class DefaultQuadcopterStrategy:
             prev_above_gate2 = self._above_gate2.clone()
             gate2_z = self.env._waypoints[2, 2]
             loop_height_threshold = 1.0
-            # Height-only condition — lateral fired too easily since gate 2 exit is
-            # already ~1.25m lateral from gate 3, barely below any reasonable threshold.
+            # Apex waypoint B: midpoint of gates 2 & 3, raised to loop height.
+            drone_pos_play = self.env._robot.data.root_link_pos_w[:, :3]
+            gate3_pos_play = self.env._waypoints[3, :3]
+            apex_pos_play  = ((self.env._waypoints[2, :3] + gate3_pos_play) * 0.5).clone()
+            apex_pos_play[2] = gate2_z + loop_height_threshold
+            dist_to_apex_play = torch.norm(drone_pos_play - apex_pos_play.unsqueeze(0), dim=-1)
+            # Apex: proximity to waypoint B AND above minimum height.
             self._above_gate2 = self._above_gate2 | (
                 (self.env._idx_wp == 3)
                 & self._crossed_gate2
-                & (drone_z > gate2_z + loop_height_threshold)
+                & (dist_to_apex_play < 0.5)
+                & (drone_z > gate2_z + loop_height_threshold * 0.8)
             )
             loop_apex_just_reached = (
                 self._above_gate2 & ~prev_above_gate2 & ~self._loop_apex_rewarded
@@ -174,19 +180,30 @@ class DefaultQuadcopterStrategy:
         gate2_just_crossed = crossed & (self.env._idx_wp == 3)
         self._crossed_gate2 = self._crossed_gate2 | gate2_just_crossed
 
-        # Stage 2: loop apex — drone must reach height above gate 2 while targeting gate 3.
-        prev_above_gate2 = self._above_gate2.clone()
+        # Compute virtual waypoints early (needed for proximity-based apex check).
         gate2_z = self.env._waypoints[2, 2]                        # gate 2 world z
         drone_z = self.env._robot.data.root_link_pos_w[:, 2]
+        drone_pos = self.env._robot.data.root_link_pos_w[:, :3]
         loop_height_threshold = 1.0                                # metres above gate 2 centre
-        # No lateral condition — that fired too easily (drone starts ~1.25m lateral
-        # from gate 3 right after crossing gate 2). Height only forces a real vertical arc.
+
+        # Waypoint B (apex): midpoint of gates 2 & 3, raised to loop height.
+        gate3_pos = self.env._waypoints[3, :3]
+        apex_pos  = ((self.env._waypoints[2, :3] + gate3_pos) * 0.5).clone()
+        apex_pos[2] = gate2_z + loop_height_threshold
+        dist_to_apex = torch.norm(drone_pos - apex_pos.unsqueeze(0), dim=-1)
+
+        # Stage 2: switch A→B to B→C when the drone is close to waypoint B,
+        # not merely above a height threshold.  Hybrid check prevents early
+        # switch if the drone happens to fly near B's xy-projection at low altitude.
+        prev_above_gate2 = self._above_gate2.clone()
+        apex_proximity_radius = 0.5                                # metres from waypoint B
         self._above_gate2 = self._above_gate2 | (
             (self.env._idx_wp == 3)
             & self._crossed_gate2
-            & (drone_z > gate2_z + loop_height_threshold)
+            & (dist_to_apex < apex_proximity_radius)
+            & (drone_z > gate2_z + loop_height_threshold * 0.8)
         )
-        # Fire exactly once: the step the apex threshold is first crossed.
+        # Fire exactly once: the step the apex is first reached.
         loop_apex_just_reached = self._above_gate2 & ~prev_above_gate2 & ~self._loop_apex_rewarded
         self._loop_apex_rewarded = self._loop_apex_rewarded | loop_apex_just_reached
 
@@ -197,41 +214,57 @@ class DefaultQuadcopterStrategy:
             & ~self._above_gate2
         )
 
-        # Tanh-normalised progress: tanh(Δd / scale) ∈ (-1, +1).
-        # scale = typical forward distance per step (e.g. 0.05m @ 3m/s, 60Hz).
-        # Symmetrically penalise retreat by retreat_mult before normalising so
-        # the asymmetry is preserved while still being bounded.
+        # --- Virtual waypoints for powerloop shaping (A → B → C) ---
+        # Path after gate 2:
+        #   A  — gate 2 exit (drone exits on -y side)
+        #   B  — apex: above midpoint of gates 2 & 3, at loop height
+        #   C  — behind gate 3 with lateral offset on the loop side
+        # After C, standard progress toward gate 3 center resumes.
+        #
+        # Phase routing:
+        #   pre-apex  (A→B):  target = waypoint B   → pulls drone upward to apex
+        #   post-apex (B→C):  target = waypoint C   → pulls drone behind gate 3
+        #   outside powerloop: target = current gate → standard progress
         progress_norm_scale = self.env.rew.get('progress_norm_scale', 0.05)
-        delta_d = last_d - curr_d   # +ve when getting closer
         retreat_mult = self.env.rew['progress_retreat_multiplier']
-        delta_d = torch.where(delta_d >= 0, delta_d, delta_d * retreat_mult)
-        base_progress = torch.tanh(delta_d / progress_norm_scale)
-        progress = base_progress
 
-        # Between gate 2 and 3: replace progress with a blend of height climbing
-        # and gate-3 approach.  Two regimes:
-        #   - Before apex: 80% height, 20% gate-3 → primarily incentivise climbing
-        #   - After apex:  25% height, 75% gate-3 → dense pull toward gate 3
-        # Outside the powerloop segment (any other gate pair) progress is unchanged.
         in_powerloop_segment = (self.env._idx_wp == 3) & self._crossed_gate2
+        pre_apex_mask  = in_powerloop_segment & ~self._above_gate2
+        post_apex_mask = in_powerloop_segment &  self._above_gate2
 
-        # Height term: Gaussian centered on target apex height.
-        # Peaks at 1.0 when drone is right at the apex, drops off above or below.
-        target_loop_height   = gate2_z + loop_height_threshold
-        height_error         = torch.abs(drone_z - target_loop_height)
-        loop_height_progress = torch.exp(-height_error / 0.3)
+        # Waypoint C (approach): behind gate 3, offset laterally to the loop side.
+        # "Behind" = opposite the gate normal; "loop side" = cross(normal, z_up).
+        gate3_normal  = self.env._normal_vectors[3]
+        z_axis        = torch.tensor([0.0, 0.0, 1.0], device=self.device)
+        gate3_lateral = torch.cross(gate3_normal, z_axis, dim=0)
+        gate3_lateral = gate3_lateral / torch.norm(gate3_lateral)
 
-        # Gate-3 approach: reuse base_progress which already includes retreat multiplier.
-        dense_loop_progress = torch.where(
-            self._above_gate2,
-            0.25 * loop_height_progress + 0.75 * base_progress,
-            0.8  * loop_height_progress + 0.2  * base_progress,
-        )
+        behind_dist = 1.0                                           # m behind gate 3
+        side_offset = 0.8                                           # m lateral (loop side)
+        up_offset   = 0.2                                           # m above gate height
+        approach_pos = (gate3_pos - behind_dist * gate3_normal
+                        + side_offset * gate3_lateral).clone()
+        approach_pos[2] = gate3_pos[2] + up_offset
 
-        progress = torch.where(in_powerloop_segment, dense_loop_progress, progress)
+        dist_to_approach = torch.norm(drone_pos - approach_pos.unsqueeze(0), dim=-1)
 
-        # Keep real curr distance in _last_distance_to_goal so future checks use true pose
-        self.env._last_distance_to_goal = curr_d.clone()
+        # Route effective distance through the active target.
+        effective_d = curr_d.clone()
+        effective_d[pre_apex_mask]  = dist_to_apex[pre_apex_mask]
+        effective_d[post_apex_mask] = dist_to_approach[post_apex_mask]
+
+        # Zero-out spurious delta on target-switch steps:
+        #   Gate 2 just crossed → target jumped from gate 2 to apex B
+        #   Apex just reached  → target jumped from apex B to approach C
+        last_d[gate2_just_crossed]     = dist_to_apex[gate2_just_crossed]
+        last_d[loop_apex_just_reached] = dist_to_approach[loop_apex_just_reached]
+
+        delta_d = last_d - effective_d   # +ve when getting closer to active target
+        delta_d = torch.where(delta_d >= 0, delta_d, delta_d * retreat_mult)
+        progress = torch.tanh(delta_d / progress_norm_scale)
+
+        # Store effective distance so next step's last_d matches the active target.
+        self.env._last_distance_to_goal = effective_d.clone()
 
         # Lap time bonus: exp((target - lap_elapsed) / constant)
         #   faster than target → exp(+) > 1 → extra reward
