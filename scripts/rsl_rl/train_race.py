@@ -109,16 +109,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     rewards = {
         # Sparse: per correctly traversed gate (direction-enforced, within bounds)
         'gate_cross_reward_scale':      5.0,
-        # Sparse: bonus on completing a full lap (all 7 gates)
+        # Sparse: flat reward on completing a full lap (all 7 gates)
         'lap_complete_reward_scale':    25.0,
+        # Sparse: extra lap bonus — exp((target - elapsed) / constant)
+        #   faster than target → bonus > lap_time_bonus, slower → decays toward 0
+        'lap_time_bonus':               0.0,
+        'lap_target_time':              0.0,    # seconds — target lap time
+        'lap_time_constant':            0.0,    # seconds — controls decay steepness
+        # Sparse: penalty for wrong gate or wrong direction crossing
+        'wrong_crossing_reward_scale':  -1.0,
         # Small per-step contact penalty
-        'crash_reward_scale':           -0.002,
+        'crash_reward_scale':           -0.005,
         # Terminal: applied on episode death (crash/altitude violation)
-        'death_cost':                   -0.5,
-        # Dense: delta distance to gate — inactive for now, enable for speed opt
+        'death_cost':                   -1.0,
+        # Dense: tanh-normalised delta distance to gate.
+        # progress = tanh(Δd / progress_norm_scale) ∈ (-1, +1).
+        # progress_norm_scale is the typical per-step forward distance (m);
+        # 0.05 = 5 cm ≈ drone at 3 m/s @ 60 Hz. Tune down for slower flights.
         # Retreat penalized retreat_mult× harder so oscillation is net negative.
-        'progress_reward_scale':        0.08,
-        'progress_retreat_multiplier':  1.000,
+        'progress_reward_scale':        0.05,
+        'progress_norm_scale':          0.05,   # metres — tanh saturation point
+        'progress_retreat_multiplier':  1.0,
     }
     # TODO ----- END -----
 

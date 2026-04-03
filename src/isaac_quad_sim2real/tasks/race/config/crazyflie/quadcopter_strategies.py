@@ -78,6 +78,7 @@ class DefaultQuadcopterStrategy:
         self._crossed_gate2      = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._above_gate2        = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._loop_apex_rewarded = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._lap_start_step     = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         # Debug snapshot populated each step during play (is_train=False)
         self._debug_rewards: dict = {}
 
@@ -85,9 +86,9 @@ class DefaultQuadcopterStrategy:
 
         if not self.cfg.is_train:
             # --- Play mode: run tracking & store env-0 indicators for CSV/plot debug ---
-            crossed        = self.env._gate_crossed_this_step
+            crossed        = self.env._target_gate_crossed
             lap_completed  = self.env._lap_completed_this_step
-            wrong_crossing = self.env._wrong_crossing_this_step
+            wrong_crossing = self.env._wrong_gate_crossed
             curr_d  = torch.norm(self.env._pose_drone_wrt_gate, dim=-1)
             drone_z = self.env._robot.data.root_link_pos_w[:, 2]
 
@@ -153,9 +154,9 @@ class DefaultQuadcopterStrategy:
         # which runs at the top of _get_dones — before this call and before
         # _get_observations, so _idx_wp and _pose_drone_wrt_gate are already
         # correct for the current gate when we get here.
-        crossed        = self.env._gate_crossed_this_step
+        crossed        = self.env._target_gate_crossed
         lap_completed  = self.env._lap_completed_this_step
-        wrong_crossing = self.env._wrong_crossing_this_step
+        wrong_crossing = self.env._wrong_gate_crossed
 
         # Progress reward: change in Euclidean distance (norm) to current gate center.
         # Positive when the drone gets closer to the gate (distance decreases).
@@ -270,10 +271,10 @@ class DefaultQuadcopterStrategy:
         #   faster than target → exp(+) > 1 → extra reward
         #   at target          → exp(0) = 1 → full bonus
         #   slower than target → exp(-) < 1 → decaying toward zero
-        # Uses _lap_elapsed snapshot taken in _update_gate_state BEFORE the
-        # lap timer is reset, so we see the actual lap duration.
+        sim_dt = self.env.physics_dt * self.env.cfg.decimation
+        lap_elapsed = (self.env.episode_length_buf - self._lap_start_step).float() * sim_dt
         lap_time_bonus = self.env.rew['lap_time_bonus'] * torch.exp(
-            (self.env.rew['lap_target_time'] - self.env._lap_elapsed) / self.env.rew['lap_time_constant']
+            (self.env.rew['lap_target_time'] - lap_elapsed) / self.env.rew['lap_time_constant']
         )
 
         # Crash: sustained contact force after a 100-step grace period
@@ -307,6 +308,11 @@ class DefaultQuadcopterStrategy:
 
             for key, value in rewards.items():
                 self._episode_sums[key] += value
+
+            # Reset lap start step when lap completes so next lap's timer starts fresh.
+            lap_done = lap_completed.bool()
+            if lap_done.any():
+                self._lap_start_step[lap_done] = self.env.episode_length_buf[lap_done]
         else:
             reward = torch.zeros(self.num_envs, device=self.device)
 
@@ -449,7 +455,6 @@ class DefaultQuadcopterStrategy:
         self.env._actions[env_ids] = 0.0
         self.env._previous_actions[env_ids] = 0.0
         self._action_history[env_ids] = 0.0
-        self.env._previous_yaw[env_ids] = 0.0
         self.env._motor_speeds[env_ids] = 0.0
         self.env._previous_omega_meas[env_ids] = 0.0
         self.env._previous_omega_err[env_ids] = 0.0
@@ -553,21 +558,15 @@ class DefaultQuadcopterStrategy:
         # Set waypoint indices and desired positions
         self.env._idx_wp[env_ids] = waypoint_indices
 
-        self.env._desired_pos_w[env_ids, :2] = self.env._waypoints[waypoint_indices, :2].clone()
-        self.env._desired_pos_w[env_ids, 2] = self.env._waypoints[waypoint_indices, 2].clone()
-
         # _n_gates_passed set to spawn gate index → sin/cos lap progress obs correct at spawn.
         # _gates_since_spawn always starts at 0 → used for lap completion detection.
         self.env._n_gates_passed[env_ids] = waypoint_indices
         self.env._gates_since_spawn[env_ids] = 0
-        self.env._lap_start_step[env_ids] = 0
+        self._lap_start_step[env_ids] = 0
 
         # Write state to simulation
         self.env._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
         self.env._robot.write_root_com_velocity_to_sim(default_root_state[:, 7:], env_ids)
-
-        # Reset variables
-        self.env._yaw_n_laps[env_ids] = 0
 
         self.env._pose_drone_wrt_gate[env_ids], _ = subtract_frame_transforms(
             self.env._waypoints[self.env._idx_wp[env_ids], :3],
@@ -581,10 +580,9 @@ class DefaultQuadcopterStrategy:
             self.env._pose_drone_wrt_gate[env_ids], dim=-1
         ).clone()
 
-        self.env._prev_x_drone_wrt_gate[env_ids] = 1.0
-        # Initialize _prev_x_all_gates to actual x-positions relative to all gates
+        # Initialize _prev_x_drone_wrt_all_gates to actual x-positions relative to all gates
         # so that the first step doesn't see a false +ve→-ve transition.
-        if self.env._prev_x_all_gates is not None:
+        if self.env._prev_x_drone_wrt_all_gates is not None:
             n_gates = self.env._waypoints.shape[0]
             drone_pos = self.env._robot.data.root_link_state_w[env_ids, :3]  # [n_reset, 3]
             n_reset_ids = drone_pos.shape[0]
@@ -593,7 +591,7 @@ class DefaultQuadcopterStrategy:
             gate_qat_exp = self.env._waypoints_quat.unsqueeze(0).expand(n_reset_ids, -1, -1).reshape(-1, 4)
             pos_all, _ = subtract_frame_transforms(gate_pos_exp, gate_qat_exp, drone_exp)
             pos_all = pos_all.reshape(n_reset_ids, n_gates, 3)
-            self.env._prev_x_all_gates[env_ids] = pos_all[:, :, 0]
+            self.env._prev_x_drone_wrt_all_gates[env_ids] = pos_all[:, :, 0]
 
         self.env._crashed[env_ids] = 0
         self._crossed_gate2[env_ids]      = False
