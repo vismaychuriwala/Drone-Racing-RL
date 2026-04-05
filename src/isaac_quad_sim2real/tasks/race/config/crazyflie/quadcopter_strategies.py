@@ -372,6 +372,43 @@ class DefaultQuadcopterStrategy:
             default_root_state[:, 7:10] = gate_normal * fwd_speed.unsqueeze(1)
         else:
             default_root_state[:, 7:10] = 0.0
+
+        # For training samples targeting gate 0, mix starts:
+        # 50% official race start, 50% default spawn in front of gate 6.
+        if self.cfg.is_train:
+            gate0_mask = waypoint_indices == self.env._initial_wp
+            if gate0_mask.any():
+                official_mask = gate0_mask & (torch.rand(n_reset, device=self.device) < 0.5)
+                off_ids = torch.where(official_mask)[0]
+                n_off = off_ids.numel()
+
+                if n_off > 0:
+                    x_local_off = torch.empty(n_off, device=self.device).uniform_(-3.0, -0.5)
+                    y_local_off = torch.empty(n_off, device=self.device).uniform_(-1.0, 1.0)
+
+                    x0_wp = self.env._waypoints[self.env._initial_wp, 0]
+                    y0_wp = self.env._waypoints[self.env._initial_wp, 1]
+                    theta0 = self.env._waypoints[self.env._initial_wp, -1]
+
+                    cos_t, sin_t = torch.cos(theta0), torch.sin(theta0)
+                    x_rot_off = cos_t * x_local_off - sin_t * y_local_off
+                    y_rot_off = sin_t * x_local_off + cos_t * y_local_off
+                    x0 = x0_wp - x_rot_off
+                    y0 = y0_wp - y_rot_off
+                    z0 = torch.full((n_off,), 0.05, device=self.device)
+                    yaw0 = torch.atan2(y0_wp - y0, x0_wp - x0)
+
+                    default_root_state[off_ids, 0] = x0
+                    default_root_state[off_ids, 1] = y0
+                    default_root_state[off_ids, 2] = z0
+
+                    quat0 = quat_from_euler_xyz(
+                        torch.zeros(n_off, device=self.device),
+                        torch.zeros(n_off, device=self.device),
+                        yaw0,
+                    )
+                    default_root_state[off_ids, 3:7] = quat0
+                    default_root_state[off_ids, 7:10] = 0.0
         # TODO ----- END -----
 
         # Handle play mode initial position
