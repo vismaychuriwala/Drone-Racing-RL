@@ -151,18 +151,8 @@ class DefaultQuadcopterStrategy:
         if not self.cfg.is_train:
             return torch.zeros(self.num_envs, device=self.device)
 
-        # Update gate crossing state before computing rewards
-        drone_pose = self.env._robot.data.root_link_state_w[:, :3]
-        self._update_gate_state(drone_pose)
-
-        # Recompute _pose_drone_wrt_gate with the (possibly advanced) _idx_wp
-        # so dist_now and _last_distance_to_goal are relative to the correct gate.
-        self.env._pose_drone_wrt_gate, _ = subtract_frame_transforms(
-            self.env._waypoints[self.env._idx_wp, :3],
-            self.env._waypoints_quat[self.env._idx_wp, :],
-            drone_pose
-        )
-
+        # Gate state (_target_gate_crossed, _lap_completed_this_step, _wrong_gate_crossed)
+        # and _pose_drone_wrt_gate are already updated by _get_dones before this is called.
         crossed       = self._target_gate_crossed
         lap_completed = self._lap_completed_this_step
 
@@ -409,9 +399,8 @@ class DefaultQuadcopterStrategy:
 
         # Handle play mode initial position
         if not self.cfg.is_train:
-            # x_local and y_local are randomly sampled
-            x_local = torch.empty(1, device=self.device).uniform_(-3.0, -0.5)
-            y_local = torch.empty(1, device=self.device).uniform_(-1.0, 1.0)
+            x_local = torch.empty(n_reset, device=self.device).uniform_(-3.0, -0.5)
+            y_local = torch.empty(n_reset, device=self.device).uniform_(-1.0, 1.0)
 
             x0_wp = self.env._waypoints[self.env._initial_wp, 0]
             y0_wp = self.env._waypoints[self.env._initial_wp, 1]
@@ -425,21 +414,23 @@ class DefaultQuadcopterStrategy:
             y0 = y0_wp - y_rot
             z0 = 0.05
 
-            # point drone towards the zeroth gate
+            # point drone towards gate 0
             yaw0 = torch.atan2(y0_wp - y0, x0_wp - x0)
 
-            default_root_state = self.env._robot.data.default_root_state[0].unsqueeze(0)
             default_root_state[:, 0] = x0
             default_root_state[:, 1] = y0
             default_root_state[:, 2] = z0
+            default_root_state[:, 7:] = 0.0
 
             quat = quat_from_euler_xyz(
-                torch.zeros(1, device=self.device),
-                torch.zeros(1, device=self.device),
+                torch.zeros(n_reset, device=self.device),
+                torch.zeros(n_reset, device=self.device),
                 yaw0
             )
             default_root_state[:, 3:7] = quat
-            waypoint_indices = self.env._initial_wp
+            waypoint_indices = torch.full(
+                (n_reset,), self.env._initial_wp, device=self.device, dtype=self.env._idx_wp.dtype
+            )
 
         # Set waypoint indices
         self.env._idx_wp[env_ids] = waypoint_indices
@@ -448,6 +439,9 @@ class DefaultQuadcopterStrategy:
         # _gates_since_spawn always starts at 0 → used for lap completion detection.
         self.env._n_gates_passed[env_ids] = waypoint_indices
         self._gates_since_spawn[env_ids] = 0
+
+        # Sync debug visualizer to spawn gate so the red sphere is correct from frame 0
+        self.env._desired_pos_w[env_ids, :3] = self.env._waypoints[waypoint_indices, :3]
 
         # Write state to simulation
         self.env._robot.write_root_link_pose_to_sim(default_root_state[:, :7], env_ids)
