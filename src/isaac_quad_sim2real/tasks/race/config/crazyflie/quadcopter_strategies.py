@@ -320,95 +320,67 @@ class DefaultQuadcopterStrategy:
 
         default_root_state = self.env._robot.data.default_root_state[env_ids]
 
-        # TODO ----- START -----
+        # TODO ----- START ----- Define the initial state during training after resetting an environment.
         n_gates = self.env._waypoints.shape[0]
+        cfg = self.cfg
 
-        # --- Gate selection ---
-        if self.random_gate_spawn:
+        random_gate_spawn = getattr(cfg, "random_gate_spawn", self.random_gate_spawn)
+        spawn_dist_min = getattr(cfg, "spawn_dist_min", self.spawn_dist_min)
+        spawn_dist_max = getattr(cfg, "spawn_dist_max", self.spawn_dist_max)
+        spawn_lateral = getattr(cfg, "spawn_lateral", self.spawn_lateral)
+        spawn_vertical = getattr(cfg, "spawn_vertical", self.spawn_vertical)
+        spawn_yaw_noise = getattr(cfg, "spawn_yaw_noise", self.spawn_yaw_noise)
+        spawn_vel_max = getattr(cfg, "spawn_vel_max", self.spawn_vel_max)
+
+        # Gate selection
+        if random_gate_spawn:
             waypoint_indices = torch.randint(
                 0, n_gates, (n_reset,), device=self.device, dtype=self.env._idx_wp.dtype
             )
         else:
             waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
 
-        # --- Spawn relative to previous gate (a few meters in front of it) ---
-        prev_gate = (waypoint_indices - 1) % n_gates
-        x_start = self.env._waypoints[prev_gate, 0]
-        y_start = self.env._waypoints[prev_gate, 1]
-        z_start = self.env._waypoints[prev_gate, 2]
-        theta   = self.env._waypoints[prev_gate, -1]   # prev gate yaw in world frame
+        # Gate world pose
+        x0_wp = self.env._waypoints[waypoint_indices, 0]
+        y0_wp = self.env._waypoints[waypoint_indices, 1]
+        z_wp = self.env._waypoints[waypoint_indices, 2]
+        theta = self.env._waypoints[waypoint_indices, -1]
 
-        # --- Per-env spawn offsets in prev gate's local frame ---
-        # x_local is positive (in front of prev gate, toward the target gate)
-        x_local = torch.empty(n_reset, device=self.device).uniform_(self.spawn_dist_min, self.spawn_dist_max)
-        y_local = torch.empty(n_reset, device=self.device).uniform_(-self.spawn_lateral,   self.spawn_lateral)
-        z_local = torch.empty(n_reset, device=self.device).uniform_(-self.spawn_vertical,  self.spawn_vertical)
+        # Spawn behind selected gate in gate-local frame
+        x_local = torch.empty(n_reset, device=self.device).uniform_(-spawn_dist_max, -spawn_dist_min)
+        y_local = torch.empty(n_reset, device=self.device).uniform_(-spawn_lateral, spawn_lateral)
+        z_local = torch.empty(n_reset, device=self.device).uniform_(-spawn_vertical, spawn_vertical)
 
-        # --- Rotate gate-local offset into world frame ---
+        # Rotate local pos to global frame
         cos_theta = torch.cos(theta)
         sin_theta = torch.sin(theta)
         x_rot = cos_theta * x_local - sin_theta * y_local
         y_rot = sin_theta * x_local + cos_theta * y_local
-
-        initial_x = x_start - x_rot
-        initial_y = y_start - y_rot
-        initial_z = z_start + z_local
+        initial_x = x0_wp - x_rot
+        initial_y = y0_wp - y_rot
+        initial_z = z_wp + z_local
 
         default_root_state[:, 0] = initial_x
         default_root_state[:, 1] = initial_y
         default_root_state[:, 2] = initial_z
 
-        # --- Per-env yaw: point along prev gate normal + noise ---
-        initial_yaw = theta
-        yaw_noise   = torch.empty(n_reset, device=self.device).uniform_(-self.spawn_yaw_noise, self.spawn_yaw_noise)
-        zeros       = torch.zeros(n_reset, device=self.device)
-        quat = quat_from_euler_xyz(zeros, zeros, initial_yaw + yaw_noise)
+        # Point drone toward selected gate with yaw noise
+        initial_yaw = torch.atan2(y0_wp - initial_y, x0_wp - initial_x)
+        yaw_noise = torch.empty(n_reset, device=self.device).uniform_(-spawn_yaw_noise, spawn_yaw_noise)
+        quat = quat_from_euler_xyz(
+            torch.zeros(n_reset, device=self.device),
+            torch.zeros(n_reset, device=self.device),
+            initial_yaw + yaw_noise,
+        )
         default_root_state[:, 3:7] = quat
 
-        # --- Optional: initial forward velocity toward gate ---
-        if self.spawn_vel_max > 0.0:
-            fwd_speed    = torch.empty(n_reset, device=self.device).uniform_(0.0, self.spawn_vel_max)
-            gate_normal  = self.env._normal_vectors[waypoint_indices]          # [n_reset, 3]
+        # Optional initial forward velocity toward gate
+        if spawn_vel_max > 0.0:
+            fwd_speed = torch.empty(n_reset, device=self.device).uniform_(0.0, spawn_vel_max)
+            gate_normal = self.env._normal_vectors[waypoint_indices]
             default_root_state[:, 7:10] = gate_normal * fwd_speed.unsqueeze(1)
         else:
             default_root_state[:, 7:10] = 0.0
-
-        # For training samples targeting gate 0, mix starts:
-        # 50% official race start, 50% default spawn in front of gate 6.
-        if self.cfg.is_train:
-            gate0_mask = waypoint_indices == self.env._initial_wp
-            if gate0_mask.any():
-                official_mask = gate0_mask & (torch.rand(n_reset, device=self.device) < 0.5)
-                off_ids = torch.where(official_mask)[0]
-                n_off = off_ids.numel()
-
-                if n_off > 0:
-                    x_local_off = torch.empty(n_off, device=self.device).uniform_(-3.0, -0.5)
-                    y_local_off = torch.empty(n_off, device=self.device).uniform_(-1.0, 1.0)
-
-                    x0_wp = self.env._waypoints[self.env._initial_wp, 0]
-                    y0_wp = self.env._waypoints[self.env._initial_wp, 1]
-                    theta0 = self.env._waypoints[self.env._initial_wp, -1]
-
-                    cos_t, sin_t = torch.cos(theta0), torch.sin(theta0)
-                    x_rot_off = cos_t * x_local_off - sin_t * y_local_off
-                    y_rot_off = sin_t * x_local_off + cos_t * y_local_off
-                    x0 = x0_wp - x_rot_off
-                    y0 = y0_wp - y_rot_off
-                    z0 = torch.full((n_off,), 0.05, device=self.device)
-                    yaw0 = torch.atan2(y0_wp - y0, x0_wp - x0)
-
-                    default_root_state[off_ids, 0] = x0
-                    default_root_state[off_ids, 1] = y0
-                    default_root_state[off_ids, 2] = z0
-
-                    quat0 = quat_from_euler_xyz(
-                        torch.zeros(n_off, device=self.device),
-                        torch.zeros(n_off, device=self.device),
-                        yaw0,
-                    )
-                    default_root_state[off_ids, 3:7] = quat0
-                    default_root_state[off_ids, 7:10] = 0.0
         # TODO ----- END -----
 
         # Handle play mode initial position
