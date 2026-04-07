@@ -148,11 +148,26 @@ class DefaultQuadcopterStrategy:
 
     def get_rewards(self) -> torch.Tensor:
 
+        # Update gate state every step (train AND play) so _idx_wp advances in play mode
+        # and observations always point at the correct next gate.
+        drone_pose = self.env._robot.data.root_link_state_w[:, :3]
+        self._update_gate_state(drone_pose)
+
+        # Recompute _pose_drone_wrt_gate with the (possibly advanced) _idx_wp.
+        self.env._pose_drone_wrt_gate, _ = subtract_frame_transforms(
+            self.env._waypoints[self.env._idx_wp, :3],
+            self.env._waypoints_quat[self.env._idx_wp, :],
+            drone_pose
+        )
+
+        # Update debug visualizer sphere to follow the current target gate.
+        ids_crossed = torch.where(self._target_gate_crossed)[0]
+        if ids_crossed.numel() > 0:
+            self.env._desired_pos_w[ids_crossed, :3] = self.env._waypoints[self.env._idx_wp[ids_crossed], :3]
+
         if not self.cfg.is_train:
             return torch.zeros(self.num_envs, device=self.device)
 
-        # Gate state (_target_gate_crossed, _lap_completed_this_step, _wrong_gate_crossed)
-        # and _pose_drone_wrt_gate are already updated by _get_dones before this is called.
         crossed       = self._target_gate_crossed
         lap_completed = self._lap_completed_this_step
 

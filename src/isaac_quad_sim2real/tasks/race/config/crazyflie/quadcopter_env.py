@@ -658,16 +658,6 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         drone_pose = self._robot.data.root_link_state_w[:, :3]
-
-        # Always update gate state (train AND play) so _idx_wp advances each step
-        # and the debug visualizer sphere stays in sync regardless of mode.
-        self.strategy._update_gate_state(drone_pose)
-
-        # Advance debug-visualizer sphere to the newly-targeted gate
-        ids_crossed = torch.where(self.strategy._target_gate_crossed)[0]
-        if ids_crossed.numel() > 0:
-            self._desired_pos_w[ids_crossed, :3] = self._waypoints[self._idx_wp[ids_crossed], :3]
-
         self._pose_drone_wrt_gate, _ = subtract_frame_transforms(self._waypoints[self._idx_wp, :3],
                                                                  self._waypoints_quat[self._idx_wp, :],
                                                                  drone_pose)
