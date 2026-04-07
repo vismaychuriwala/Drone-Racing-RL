@@ -332,13 +332,37 @@ class DefaultQuadcopterStrategy:
         spawn_yaw_noise = getattr(cfg, "spawn_yaw_noise", self.spawn_yaw_noise)
         spawn_vel_max = getattr(cfg, "spawn_vel_max", self.spawn_vel_max)
 
-        # Gate selection
+        # Gate selection with a lightweight curriculum (config-overridable).
+        # Stage 0: gate 0 only; Stage 1: gates 0/1/3; Stage 2: all gates.
+        it = int(getattr(self.env, "iteration", 0))
+        use_reset_curriculum = bool(getattr(cfg, "use_reset_curriculum", True))
+        curriculum_iter_1 = int(getattr(cfg, "curriculum_iter_1", 1000))
+        curriculum_iter_2 = int(getattr(cfg, "curriculum_iter_2", 3000))
+
+        if use_reset_curriculum:
+            if it < curriculum_iter_1:
+                gate_pool = [0]
+            elif it < curriculum_iter_2:
+                gate_pool = [0, 1, 3]
+            else:
+                gate_pool = list(range(n_gates))
+        else:
+            gate_pool = list(range(n_gates))
+
+        pool_tensor = torch.tensor(gate_pool, device=self.device, dtype=self.env._idx_wp.dtype)
         if random_gate_spawn:
-            waypoint_indices = torch.randint(
-                0, n_gates, (n_reset,), device=self.device, dtype=self.env._idx_wp.dtype
-            )
+            waypoint_indices = pool_tensor[torch.randint(0, len(gate_pool), (n_reset,), device=self.device)]
         else:
             waypoint_indices = torch.zeros(n_reset, device=self.device, dtype=self.env._idx_wp.dtype)
+
+        # Optionally respawn failed envs at the gate where they failed.
+        if bool(getattr(cfg, "reset_on_fail_same_gate", True)) and self.cfg.is_train:
+            crashed_mask = self.env.reset_terminated[env_ids]
+            timeout_mask = self.env.reset_time_outs[env_ids]
+            if crashed_mask.any():
+                waypoint_indices = torch.where(crashed_mask, self.env._idx_wp[env_ids], waypoint_indices)
+            if timeout_mask.any():
+                waypoint_indices = torch.where(timeout_mask, self.env._idx_wp[env_ids], waypoint_indices)
 
         # Gate world pose
         x0_wp = self.env._waypoints[waypoint_indices, 0]
@@ -453,7 +477,8 @@ class DefaultQuadcopterStrategy:
         self.env._crashed[env_ids] = 0
 
         # Domain randomization: linear curriculum
-        if self.domain_randomization:
+        dr_enabled = bool(getattr(self.cfg, "domain_randomization", self.domain_randomization))
+        if dr_enabled:
             n = len(env_ids)
             alpha = max(0.0, min(1.0, (self.env.iteration - self.dr_start_iter)
                                       / max(1, self.dr_full_iter - self.dr_start_iter)))
